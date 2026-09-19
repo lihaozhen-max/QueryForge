@@ -1,3 +1,4 @@
+import os
 import uuid
 
 import uvicorn
@@ -21,4 +22,7 @@ async def middleware_func(request: Request, call_next):
     return await call_next(request)
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8000)
+    # 端口支持用环境变量 APP_PORT 覆盖：本机 8000 可能已被其它项目占用，
+    # 默认仍为 8000，保持与原有行为一致。
+    port = int(os.getenv('APP_PORT', '8000'))
+    uvicorn.run(app, host='0.0.0.0', port=port)
