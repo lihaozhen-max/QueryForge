@@ -18,5 +18,8 @@ log/
 *.log
 
 # Local secrets / environment-specific config
-# Keep conf/app_config.example.yaml tracked as a template instead.
+# conf/app_config.yaml 含数据库口令与 LLM API Key, 不进入版本库;
+# 用 conf/app_config.example.yaml 作为模板。
+# 注意: conf/meta_config.yaml 只有数仓表/字段/指标的语义描述, 不含任何凭据,
+# 且是构建元知识库的必要输入, 因此保留在版本库中跟踪。
 conf/app_config.yaml

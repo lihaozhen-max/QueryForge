@@ -1,6 +1,9 @@
 # 应用配置示例模板
-# 使用方法：复制为 conf/app_config.yaml 后填入本地真实值。
+# 使用方法：复制为 conf/app_config.yaml 后按需修改。
 # conf/app_config.yaml 已被 .gitignore 忽略，请勿提交真实凭据。
+#
+# 凭据类配置一律通过环境变量提供，不出现在配置文件里。
+# 语法为 ${oc.env:变量名}（必填，缺失则启动报错）或 ${oc.env:变量名,默认值}（可选，带默认值）
 
 # 日志配置
 logging:
@@ -14,21 +17,25 @@ logging:
     enable: true
     level: INFO
 
-# 数据库meta的配置
+# 数据库meta的配置（存放表/字段/指标等元数据）
+# 连接信息可用环境变量覆盖: DB_META_HOST / DB_META_PORT / DB_META_DATABASE
 db_meta:
-  host: localhost
-  port: 3306
-  user: your_mysql_user
-  password: your_mysql_password
-  database: meta
+  host: ${oc.env:DB_META_HOST,localhost}
+  port: ${oc.env:DB_META_PORT,3306}
+  user: ${oc.env:DB_META_USER,root}
+  # 必填环境变量: DB_META_PASSWORD
+  password: ${oc.env:DB_META_PASSWORD}
+  database: ${oc.env:DB_META_DATABASE,meta}
 
-# 数据库dw的配置
+# 数据库dw的配置（业务数仓，SQL 实际执行的位置）
+# 连接信息可用环境变量覆盖: DB_DW_HOST / DB_DW_PORT / DB_DW_DATABASE
 db_dw:
-  host: localhost
-  port: 3306
-  user: your_mysql_user
-  password: your_mysql_password
-  database: dw
+  host: ${oc.env:DB_DW_HOST,localhost}
+  port: ${oc.env:DB_DW_PORT,3306}
+  user: ${oc.env:DB_DW_USER,root}
+  # 必填环境变量: DB_DW_PASSWORD
+  password: ${oc.env:DB_DW_PASSWORD}
+  database: ${oc.env:DB_DW_DATABASE,dw}
 
 # qdrant的配置
 qdrant:
@@ -49,6 +56,7 @@ es:
   index_name: data_agent
 
 # llm的配置
+# 必填环境变量: LLM_API_KEY；模型名可用 LLM_MODEL_NAME 覆盖
 llm:
-  model_name: deepseek-chat
-  api_key: your_llm_api_key
+  model_name: ${oc.env:LLM_MODEL_NAME,deepseek-chat}
+  api_key: ${oc.env:LLM_API_KEY}

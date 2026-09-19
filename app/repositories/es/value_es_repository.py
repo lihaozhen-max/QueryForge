@@ -51,7 +51,9 @@ class ValueESRepository:
             for value_info in batch_value_infos:
                 operations.append({
                     'index':{
-                        "_index": index_name
+                        "_index": index_name,
+                        # 显式指定文档id, 使重复构建时同一字段值覆盖同一文档而不是不断产生重复文档
+                        "_id": value_info["id"]
                     }
                 })
                 operations.append(value_info)

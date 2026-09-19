@@ -64,12 +64,25 @@ state_graph.add_edge("filter_table","add_extra_context")
 state_graph.add_edge("add_extra_context","generate_sql")
 state_graph.add_edge("generate_sql","validate_sql")
 
+# "校验-校正"环的最大轮数: 校验失败后被允许去校正的最大次数, 超过则直接执行(由execute_sql抛出最终错误)
+MAX_CORRECT_ATTEMPTS = 2
+
+def _route_after_validate(state: DataAgentState) -> str:
+    """校验通过直接执行; 校验失败且还没用满校正次数则去校正; 否则放弃校正直接执行"""
+    if state.get('error') is None:
+        return 'execute_sql'
+    if state.get('correct_sql_count', 0) <= MAX_CORRECT_ATTEMPTS:
+        return 'correct_sql'
+    logger.warning(f"已校正{state.get('correct_sql_count')}次仍校验失败, 放弃校正直接执行")
+    return 'execute_sql'
+
 state_graph.add_conditional_edges("validate_sql",
-                                  lambda  state: 'execute_sql' if state.get('error') is None else 'correct_sql',
+                                  _route_after_validate,
                                 {'execute_sql': 'execute_sql', 'correct_sql': 'correct_sql'}
                                   )
 
-state_graph.add_edge('correct_sql', 'execute_sql')
+# 校正后回到校验节点复验, 确认校正结果真的可用, 而不是盲目执行
+state_graph.add_edge('correct_sql', 'validate_sql')
 state_graph.add_edge('execute_sql',END)
 compiled_graph = state_graph.compile()
 
@@ -104,7 +117,7 @@ if __name__ == '__main__':
                 - 2025年各地区平均销售额
                 - 各个地区iPhone去年卖了多少钱
                 '''
-                state = DataAgentState(query="各个地区iPhone去年卖了多少钱")
+                state = DataAgentState(query="各个地区iPhone去年卖了多少钱", correct_sql_count=0)
                 # 创建上下文件对象
                 context = DataAgentContext(
                     dw_mysql_repo=DWMysqlRepository(dw_session),

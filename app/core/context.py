@@ -1,6 +1,5 @@
 import asyncio
 from _contextvars import ContextVar,Token
-from dataclasses import dataclass
 
 
 request_context_var = ContextVar('req_id', default = '')

@@ -2,7 +2,6 @@ import yaml
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
-from sqlalchemy.ext.asyncio import result
 
 from app.agent.context import DataAgentContext
 from app.agent.llm import llm

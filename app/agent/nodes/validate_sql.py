@@ -21,14 +21,7 @@ async def validate_sql(state: DataAgentState, runtime:Runtime[DataAgentContext])
 
         return {'error': None}
     except Exception as e:
-        logger.error(f"校验SQL失败： {sql}")
-        return {'error': f'SQL语法错误: {str(e)}'}
-
-
-
-
-
-
-    except Exception as e:
-        logger.error(f"校验SQL失败： {str(e)}")
-        return {"error": f"校验SQL失败： {str(e)}"}
+        # 本次校验失败, 校正次数+1; 用于限制"校验-校正"环的最大轮数, 避免死循环
+        correct_sql_count = state.get('correct_sql_count', 0) + 1
+        logger.error(f'校验SQL失败(第{correct_sql_count}次): {sql} - {str(e)}')
+        return {'error': f'SQL语法错误: {str(e)}', 'correct_sql_count': correct_sql_count}

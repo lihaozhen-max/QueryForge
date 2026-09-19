@@ -2,7 +2,6 @@ import asyncio
 from typing import Optional
 
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
-from openai.types import embedding
 
 from app.conf.app_config import EmbeddingConfig, app_config
 

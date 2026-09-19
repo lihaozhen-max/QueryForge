@@ -1,7 +1,6 @@
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
-from app.agent.nodes.recall_column import recall_column
 from app.agent.state import DataAgentState, TableInfoState, ColumnInfoState, MetricInfoState
 from app.core.log import logger
 

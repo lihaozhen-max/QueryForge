@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import uuid
 
 import aiohttp
@@ -234,7 +235,8 @@ class MetaKnowledgeService:
                 # 为每个值创建ValueInfoES对象, 并添加到列表中
                 for value in values:
                     value_infos.append(ValueInfoES(
-                        id = f'{column_info.type}',
+                        # 由字段id + 字段值生成稳定且唯一的文档id: 同一字段值重复构建时id不变, 避免重复文档
+                        id=_build_value_doc_id(column_info.id, value),
                         value = value,
                         type = column_info.type,
                         column_id = column_info.id,
@@ -330,6 +332,12 @@ class MetaKnowledgeService:
 
         # 保存到qdrant
         await self.metric_qdrant_repo.insert_metric_info_vectors(ids, payloads, vectors)
+
+
+def _build_value_doc_id(column_id: str, value) -> str:
+    """由字段id和字段值构造稳定的ES文档id(32位十六进制, 满足ES _id长度限制)"""
+    raw = f'{column_id}\u0000{value}'
+    return hashlib.md5(raw.encode('utf-8')).hexdigest()
 
 
 

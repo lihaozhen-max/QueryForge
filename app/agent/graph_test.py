@@ -6,8 +6,6 @@ from langgraph.constants import START, END
 from langgraph.graph import StateGraph
 from langgraph.runtime import Runtime
 
-from app.repositories.es.value_es_repository import ValueESRepository
-
 """
 langgraph相关重要概念
     状态图：StateGraph的实例

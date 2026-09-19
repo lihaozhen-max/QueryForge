@@ -1,7 +1,4 @@
-import os
-
 from langchain.chat_models import init_chat_model
-from sqlalchemy.ext.asyncio import result
 
 from app.conf.app_config import app_config
 

@@ -1,5 +1,4 @@
 from qdrant_client import AsyncQdrantClient,models
-from sqlalchemy.ext.asyncio import result
 
 from app.conf.app_config import app_config
 from app.models.qdrant.column_info_qdrant import ColumnInfoQdrant

@@ -1,4 +1,3 @@
-from operator import index
 import asyncio
 
 from elasticsearch import AsyncElasticsearch

@@ -48,6 +48,7 @@ class DataAgentState(TypedDict):
     keywords: list[str]
     sql: str
     error: str
+    correct_sql_count: int # 已执行的校正次数, 用于给"校验-校正"环设置上限
     recall_columns: list[ColumnInfoQdrant] # 召回的字段信息列表
     recall_metrics: list[MetricInfoQdrant] # 召回的指标信息列表
     recall_values: list[ValueInfoES] # 召回的字段值信息列表
