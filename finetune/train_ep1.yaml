@@ -1,0 +1,73 @@
+﻿### 掌柜问数 Qwen3-8B LoRA 训练配置（bf16，16 精度，不量化）
+###
+### 用法（在租卡机器上）：
+###   cd /root/autodl-tmp/LLaMA-Factory
+###   llamafactory-cli train /root/autodl-tmp/train_qwen3_8b_lora.yaml
+###
+### 关键参数说明见文件末尾注释。
+
+### ---- 模型 ----
+model_name_or_path: /root/autodl-tmp/models/Qwen3-8B
+trust_remote_code: true
+
+### ---- 训练方式：LoRA + bf16（不量化）----
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target: all
+
+### ---- 数据集 ----
+# dataset_dir 指向 dataset_info.json 所在目录
+dataset_dir: /root/autodl-tmp/data
+dataset: zhangguiwenshu_sft
+eval_dataset: zhangguiwenshu_val
+template: qwen3
+cutoff_len: 4096
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### ---- 训练超参 ----
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 8      # 等效 batch = 16
+learning_rate: 1.0e-4
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true                          # 16 精度，不是 fp16（bf16 更稳）
+fp16: false
+gradient_checkpointing: true
+
+### ---- 验证与保存 ----
+eval_strategy: steps
+eval_steps: 100
+save_steps: 100
+save_total_limit: 2                 # 只留最近 2 个检查点，省磁盘
+logging_steps: 10
+plot_loss: true
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+
+### ---- 输出 ----
+output_dir: /root/autodl-tmp/output/qwen3-8b-lora-ep1
+overwrite_output_dir: true
+report_to: none
+
+### ==========================================================================
+### 参数为什么这么设
+### =======================================================================
+### bf16: true           你要的"16 精度"。不用 fp16 是因为 bf16 数值范围大、训练更稳，
+###                       RTX PRO 6000 原生支持。（quantization_bit 不设置 = 不量化）
+### lora_rank: 16        LoRA 秩。数据量 600 条左右，16 足够；太大反而容易过拟合。
+### lora_target: all     对所有线性层加 LoRA，比只加 q_proj/v_proj 效果好。
+### cutoff_len: 4096     训练样本的 human 段含完整 schema，比较长，不能设太小，
+###                       否则 schema 会被截断，直接影响字段映射能力。
+### num_train_epochs: 3  656 条 × N epoch（等效 batch 16）。
+###                       数据量不大，3 epoch 是常用起点；若 eval_loss 早早回升就减到 2。
+### learning_rate: 1e-4  LoRA 常用区间 1e-4 ~ 2e-4。
+### save_total_limit: 2  磁盘有限，只保留最近两个检查点。
+### ==========================================================================
+

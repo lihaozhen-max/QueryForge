@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 掌柜问数（QueryForge）微调 —— 评测集生成器
@@ -624,7 +624,7 @@ def main() -> int:
     # ---- 落盘 ----
     out_path: Path = args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as fh:
+    with out_path.open("w", encoding="utf-8", newline="") as fh:
         for rec in records:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 

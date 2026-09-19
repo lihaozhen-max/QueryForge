@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 由标准 SQL 机械反向生成「澄清类」与「拒答类」训练样本。
@@ -110,40 +110,55 @@ _ENTITIES = [
 ]
 
 # 自然的口语化问法模板：信息不全是常态，但听起来要像真人提问
+#
+# 覆盖 7 种「缺失要点组合」。为什么要分这么细：
+# 微调后模型曾把「销售额是多少」（只缺时间范围）直接答成 SQL —— 因为训练时
+# 只给了「同时缺时间与口径」的样本，模型没学会"只缺一个要素也该反问"。
+# 因此每种组合都要有足够多、足够自然的说法。
 _VAGUE_TEMPLATES = {
     # 同时缺时间与口径
     ("time", "metric"): [
         "{e}卖得怎么样？", "{e}的业绩怎么样？", "看看{e}的情况",
         "{e}表现如何？", "帮我分析下{e}", "{e}的数据怎么样？",
+        "{e}经营得如何？", "{e}最近如何？", "我想看看{e}的表现",
+        "{e}做得怎么样？", "了解下{e}", "{e}的情况如何？",
     ],
     # 只缺时间
     ("time",): [
         "{e}的销售额怎么样？", "{e}现在表现如何？", "看看{e}的销售数据",
-        "{e}卖得好吗？",
+        "{e}卖得好吗？", "{e}这段时间如何？", "{e}的销售情况怎么样？",
+        "{e}最近卖得如何？", "查一下{e}的销售", "{e}的销量如何？",
     ],
     # 只缺口径
     ("metric",): [
         "{e}的情况怎么样？", "{e}表现如何？", "看看{e}的关键数据",
-        "{e}整体怎么样？",
+        "{e}整体怎么样？", "{e}指标如何？", "{e}的核心数据是多少？",
+        "{e}有什么值得关注的？", "分析下{e}",
     ],
     # 只缺粒度
     ("grain",): [
         "看看{e}的整体情况", "{e}总体怎么样？", "{e}的汇总数据给我看看",
+        "{e}总的情况如何？", "给我看{e}的概览", "{e}整体表现如何？",
     ],
     # 缺时间 + 粒度
     ("time", "grain"): [
         "看看{e}的销售情况", "{e}最近卖得怎么样？", "帮我看看{e}的数据",
+        "{e}最近的销售情况", "查一下{e}最近的销量", "{e}这段时间卖得如何？",
+        "{e}近期表现怎么样？", "我想看{e}的销售趋势",
     ],
     # 缺粒度 + 口径
     ("grain", "metric"): [
         "{e}怎么样？", "看看{e}的情况", "{e}的业务表现如何？",
+        "{e}还好吗？", "说说{e}的情况",
     ],
     # 三者全缺
     ("time", "grain", "metric"): [
         "看看{e}的销售情况", "{e}最近怎么样？", "帮我分析下{e}的业务",
-        "{e}的经营情况如何？",
+        "{e}的经营情况如何？", "{e}情况怎么样？", "我想了解下{e}",
+        "分析一下{e}", "{e}最近的表现如何？",
     ],
 }
+
 
 # 无实体时的通用模糊问法
 _GENERIC_VAGUE = [
@@ -257,6 +272,124 @@ def _quote(v: str) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
+# ==========================================================================
+# 模板直接合成澄清样本
+# ==========================================================================
+# 为什么不只用「反向变换」：
+#   反向变换要求源 SQL 至少含时间条件或 GROUP BY 之一。而语料里的问题大多没提
+#   时间，导致 437 条 SQL 里有 353 条（80%）被跳过，最终只覆盖「时间+口径」和
+#   「粒度+口径」两种缺失组合。
+#   微调后模型恰恰把「只缺时间范围」的问题（如"销售额是多少"）直接答成了 SQL
+#   —— 因为训练数据里根本没有这种组合。
+#
+# 改为**模板直接合成**：显式枚举 7 种缺失组合，每种配多句自然问法，再填入真实
+# 业务实体，保证组合覆盖均衡。答案正确性由模板显式指定（澄清类标准答案不是 SQL，
+# 而是"应澄清哪些要点"），按构造即正确，无需人工标注。
+
+_CLARIFY_TEMPLATES = {
+    ("time",): [
+        "{e}的销售额怎么样？", "{e}现在表现如何？", "看看{e}的销售数据",
+        "{e}卖得好吗？", "{e}的销售情况怎么样？", "{e}最近卖得如何？",
+        "{e}的销量如何？", "{e}这段时间卖得怎么样？", "查一下{e}的销售额",
+    ],
+    ("metric",): [
+        "{e}的情况怎么样？", "{e}表现如何？", "看看{e}的关键数据",
+        "{e}整体怎么样？", "{e}有什么值得关注的？", "分析下{e}",
+        "{e}的核心指标是多少？", "{e}的情况如何？",
+    ],
+    ("grain",): [
+        "看看{e}的整体情况", "{e}总体怎么样？", "{e}的汇总数据给我看看",
+        "{e}总的情况如何？", "{e}整体表现如何？", "给我看{e}的概览",
+    ],
+    ("time", "metric"): [
+        "{e}卖得怎么样？", "{e}的业绩怎么样？", "看看{e}的情况",
+        "{e}表现如何？", "帮我分析下{e}", "{e}经营得如何？",
+        "我想看看{e}的表现", "{e}做得怎么样？", "了解下{e}",
+    ],
+    ("time", "grain"): [
+        "看看{e}的销售情况", "{e}最近卖得怎么样？", "帮我看看{e}的数据",
+        "{e}最近的销售情况", "查一下{e}最近的销量", "{e}近期表现怎么样？",
+        "我想看{e}的销售趋势",
+    ],
+    ("grain", "metric"): [
+        "{e}怎么样？", "看看{e}的情况", "{e}的业务表现如何？",
+        "{e}还好吗？", "说说{e}的情况", "{e}的状况如何？",
+    ],
+    ("time", "grain", "metric"): [
+        "看看{e}的销售情况", "{e}最近怎么样？", "帮我分析下{e}的业务",
+        "{e}的经营情况如何？", "{e}情况怎么样？", "我想了解下{e}",
+        "分析一下{e}", "{e}最近的表现如何？",
+    ],
+}
+
+_MISSING_QUESTIONS = {
+    "时间范围": "统计的时间范围？（例如：1月 / 第一季度 / 全部数据）",
+    "统计粒度": "希望按什么维度看？（例如：大区 / 品类 / 月份）",
+    "指标口径": "具体看哪个指标？（例如：销售额 GMV / 客单价 AOV / 销量 / 订单数）",
+}
+
+
+def _missing_to_labels(keys: tuple) -> list[str]:
+    m = []
+    if "time" in keys:
+        m.append("时间范围")
+    if "grain" in keys:
+        m.append("统计粒度")
+    if "metric" in keys:
+        m.append("指标口径")
+    return m
+
+
+def _build_clarify_answer(missing: list[str]) -> str:
+    lines = ["这个问题还缺少一些必要信息，我需要确认后才能给出准确结果："]
+    for i, m in enumerate(missing, 1):
+        lines.append(f"{i}. {_MISSING_QUESTIONS.get(m, m + '？')}")
+    return "\n".join(lines)
+
+
+def synthesize_clarify(schema: dict, rng: random.Random,
+                       per_combo: int = 0) -> list[dict]:
+    """
+    按 7 种缺失组合 × 业务实体 × 多种问法合成澄清样本。
+    per_combo > 0 时限制每种组合的产出条数，便于控制总量。
+    """
+    entities: list[str] = []
+    entities += sorted({r["province"] for r in schema["regions"]})
+    entities += sorted({r["region_name"] for r in schema["regions"]})
+    entities += sorted({p["category"] for p in schema["products"]})
+    entities += sorted({p["brand"] for p in schema["products"]})
+    entities += ["客户", "会员", "订单", "销售"]
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for keys, tpls in _CLARIFY_TEMPLATES.items():
+        missing = _missing_to_labels(keys)
+        answer = _build_clarify_answer(missing)
+        made = 0
+        ents = entities[:]
+        rng.shuffle(ents)
+        for ent in ents:
+            for tpl in rng.sample(tpls, len(tpls)):
+                q = tpl.format(e=ent)
+                if q in seen:
+                    continue
+                seen.add(q)
+                out.append({
+                    "question": q,
+                    "answer": answer,
+                    "capability_hint": "CLARIFY",
+                    "missing": missing,
+                    "derived_from_sql": None,
+                    "source": "template_synth",
+                })
+                made += 1
+                if per_combo and made >= per_combo:
+                    break
+            if per_combo and made >= per_combo:
+                break
+    return out
+
+
 def build_refusal_samples(schema: dict, rng: random.Random) -> list[dict]:
     """拒答类：DML/DDL、越权读取。答案标明"只能查询"。"""
     regions = schema["regions"]
@@ -312,20 +445,34 @@ def build_refusal_samples(schema: dict, rng: random.Random) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="生成澄清类与拒答类训练样本")
     parser.add_argument("--test-set", type=Path, default=DATA_DIR / "test.jsonl",
-                        help="从中取标准 SQL 做反向变换")
+                        help="评测集（默认不用于生成训练样本，避免污染）")
     parser.add_argument("--train-set", type=Path, default=DATA_DIR / "train.jsonl",
                         help="已采集的训练集（可选，一起做反向变换）")
+    parser.add_argument("--synth-set", type=Path, default=DATA_DIR / "train_synth.jsonl",
+                        help="合成的问数→SQL 训练集（主要 SQL 池，务必带上）")
+    parser.add_argument("--use-test-set", action="store_true",
+                        help="允许用评测集的 SQL 生成澄清样本（默认关闭，避免训练/评测泄漏）")
     parser.add_argument("--out", type=Path, default=DATA_DIR / "negatives.jsonl")
     parser.add_argument("--seed", type=int, default=20250921)
     parser.add_argument("--max-clarify", type=int, default=220, help="澄清样本上限")
+    parser.add_argument("--per-combo", type=int, default=18,
+                        help="每种缺失组合最多合成多少条（0=不限）")
     parser.add_argument("--schema", type=Path, default=None)
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
 
     # ---- 收集可用的标准 SQL ----
+    # 池子选择的要点：
+    #   * train_synth / train 是训练数据的正当来源（这里 SQL 结构最丰富）
+    #   * test 属于评测集，**默认不使用** —— 若用评测集的 SQL 生成训练样本，
+    #     模型可能学会"对评测题反问"，造成训练/评测泄漏
+    sources = [args.synth_set, args.train_set]
+    if args.use_test_set:
+        sources.append(args.test_set)
+
     sql_pool: list[tuple[str, str]] = []
-    for path in (args.test_set, args.train_set):
+    for path in sources:
         if not path.exists():
             continue
         for ln in path.read_text(encoding="utf-8").splitlines():
@@ -335,19 +482,36 @@ def main() -> int:
                 rec = json.loads(ln)
             except json.JSONDecodeError:
                 continue
-            sql = rec.get("reference_sql")
+            sql = rec.get("reference_sql") or rec.get("correct_sql")
             q = rec.get("question")
             if sql and q:
                 sql_pool.append((q, sql))
     if not sql_pool:
-        print("[错误] 没有找到带标准 SQL 的样本，请先运行 gen_eval_set.py", file=sys.stderr)
+        print("[错误] 没有找到带标准 SQL 的样本，请先运行 gen_eval_set.py / "
+              "synthesize_train_data.py", file=sys.stderr)
         return 2
     print(f"[1/4] 从 {len(sql_pool)} 条 (问题, SQL) 中做反向变换")
+    if not args.use_test_set:
+        print("      已排除评测集 SQL（避免训练/评测泄漏）")
 
-    # ---- 澄清样本 ----
+    # ---- 载入 schema（模板合成与拒答样本都需要真实业务实体）----
+    sys.path.insert(0, str(HERE))
+    from gen_eval_set import load_schema, DEFAULT_SCHEMA_CANDIDATES
+    schema_path = args.schema or next((p for p in DEFAULT_SCHEMA_CANDIDATES if p.exists()), None)
+    if schema_path is None:
+        print("[错误] 找不到 dw.sql（合成澄清/拒答样本需要真实实体名）", file=sys.stderr)
+        return 2
+    schema = load_schema(schema_path)
+
+    # ---- 澄清样本：两条来源合并 ----
+    # ① 模板直接合成：显式覆盖 7 种缺失组合，保证均衡（主力）
+    # ② 反向变换：从 SQL 反推，覆盖"时间+口径/粒度+口径"两类（补充）
+    clarify = synthesize_clarify(schema, rng, per_combo=args.per_combo)
+    seen_q: set[str] = {c["question"] for c in clarify}
+    n_tpl = len(clarify)
+
     rng.shuffle(sql_pool)
-    clarify: list[dict] = []
-    seen_q: set[str] = set()
+    n_rev = 0
     for q, sql in sql_pool:
         if len(clarify) >= args.max_clarify:
             break
@@ -355,16 +519,10 @@ def main() -> int:
         if item and item["question"] not in seen_q:
             seen_q.add(item["question"])
             clarify.append(item)
-    print(f"[2/4] 反向生成澄清样本 {len(clarify)} 条")
+            n_rev += 1
+    print(f"[2/4] 澄清样本 {len(clarify)} 条（模板合成 {n_tpl} + 反向变换 {n_rev}）")
 
     # ---- 拒答样本 ----
-    sys.path.insert(0, str(HERE))
-    from gen_eval_set import load_schema, DEFAULT_SCHEMA_CANDIDATES
-    schema_path = args.schema or next((p for p in DEFAULT_SCHEMA_CANDIDATES if p.exists()), None)
-    if schema_path is None:
-        print("[错误] 找不到 dw.sql（拒答样本需要真实实体名）", file=sys.stderr)
-        return 2
-    schema = load_schema(schema_path)
     refusals = build_refusal_samples(schema, rng)
     print(f"[3/4] 生成拒答样本 {len(refusals)} 条")
 
@@ -388,7 +546,7 @@ def main() -> int:
 
     rng.shuffle(records)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    with args.out.open("w", encoding="utf-8") as fh:
+    with args.out.open("w", encoding="utf-8", newline="") as fh:
         for rec in records:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 

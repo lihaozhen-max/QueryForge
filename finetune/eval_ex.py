@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 微调效果评测器（阶段 P1 / P5）
@@ -432,7 +432,7 @@ def main() -> int:
 
     if args.details_out:
         args.details_out.parent.mkdir(parents=True, exist_ok=True)
-        with args.details_out.open("w", encoding="utf-8") as fh:
+        with args.details_out.open("w", encoding="utf-8", newline="") as fh:
             for d in res["details"]:
                 fh.write(json.dumps(d, ensure_ascii=False) + "\n")
         print(f"逐条结果已写出 -> {args.details_out}")

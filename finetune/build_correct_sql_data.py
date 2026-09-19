@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 生成 correct_sql 节点的训练数据（错误 SQL + 真实报错 → 修正 SQL）。
@@ -236,7 +236,7 @@ async def main_async(args) -> int:
         async with dw_mysql_client_manager.session_factory() as session:
             repo = DWMysqlRepository(session)
 
-            with args.out.open("w", encoding="utf-8") as fh:
+            with args.out.open("w", encoding="utf-8", newline="") as fh:
                 processed = 0
                 for correct_sql, rec in sources:
                     if args.limit and processed >= args.limit:

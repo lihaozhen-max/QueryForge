@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 合并三路数据源，生成最终训练集（LLaMA-Factory sharegpt 格式）。
@@ -247,6 +247,8 @@ def main() -> int:
     ap.add_argument("--val-ratio", type=float, default=0.08, help="验证集比例")
     ap.add_argument("--correct-ratio", type=float, default=0.5,
                     help="correct_sql 相对 generate_sql 的目标比例（0=不降采样）")
+    ap.add_argument("--clarify-ratio", type=float, default=0.18,
+                    help="clarify 相对 generate_sql 的目标比例（0=不降采样）")
     ap.add_argument("--seed", type=int, default=20250924)
     ap.add_argument("--out-dir", type=Path, default=DATA)
     args = ap.parse_args()
@@ -348,6 +350,37 @@ def main() -> int:
     gen = [r for r in deduped if r["task"] == "generate_sql"]
     cor = [r for r in deduped if r["task"] == "correct_sql"]
     oth = [r for r in deduped if r["task"] not in ("generate_sql", "correct_sql")]
+
+    # 澄清样本也做配比：它样本量大但属于少数派任务，
+    # 占比过高会挤占 SQL 生成能力，过低则学不会反问。
+    # 目标：clarify 占训练集约 clarify-ratio（默认 15%）。
+    # 按缺失组合分层抽样，保证各组合都有覆盖。
+    cl = [r for r in oth if r["task"] == "clarify"]
+    rf = [r for r in oth if r["task"] != "clarify"]
+    if args.clarify_ratio > 0 and gen and cl:
+        target_cl = int(len(gen) * args.clarify_ratio)
+        if target_cl < len(cl):
+            by_missing: dict[tuple, list[dict]] = {}
+            for r in cl:
+                # 缺失组合从 human 段的编号行体现，这里用答案文本 + 问题做粗略分层：
+                # 直接用 missing 字段更准 —— build 阶段没保留它，故从答案推断
+                ans = r["conversations"][2]["value"]
+                key = ans.split("\n", 1)[1] if "\n" in ans else ans
+                by_missing.setdefault(key, []).append(r)
+            rng_c = random.Random(args.seed)
+            picked: list[dict] = []
+            per = max(1, target_cl // max(1, len(by_missing)))
+            for k, rows in by_missing.items():
+                rng_c.shuffle(rows)
+                picked.extend(rows[:per])
+            if len(picked) < target_cl:
+                rest = [r for r in cl if r not in picked]
+                rng_c.shuffle(rest)
+                picked.extend(rest[: target_cl - len(picked)])
+            print(f"      clarify 降采样：{len(cl)} -> {len(picked)} 条"
+                  f"（覆盖 {len(by_missing)} 种缺失组合，比例 {args.clarify_ratio:g}:1）")
+            cl = picked
+    oth = cl + rf
     if args.correct_ratio > 0 and cor:
         target = int(len(gen) * args.correct_ratio)
         if target < len(cor):
@@ -385,7 +418,7 @@ def main() -> int:
     train = deduped[n_val:]
 
     def write_jsonl(path: Path, rows: list[dict]) -> None:
-        with path.open("w", encoding="utf-8") as fh:
+        with path.open("w", encoding="utf-8", newline="") as fh:
             for r in rows:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
 

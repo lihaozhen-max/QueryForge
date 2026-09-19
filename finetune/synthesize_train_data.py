@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 快速合成 generate_sql 训练数据（替代跑整条流水线采集）。
@@ -280,7 +280,7 @@ async def main_async(args) -> int:
             kept = dropped = failed = 0
             reason_counter: dict[str, int] = {}
             lock = asyncio.Lock()
-            fh = args.out.open("a", encoding="utf-8")
+            fh = args.out.open("a", encoding="utf-8", newline="")
 
             async def worker(q: str):
                 nonlocal kept, dropped, failed
