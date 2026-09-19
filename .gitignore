@@ -8,3 +8,15 @@ wheels/
 
 # Virtual environments
 .venv
+
+# IDE
+.idea/
+
+# Logs
+logs/
+log/
+*.log
+
+# Local secrets / environment-specific config
+# Keep conf/app_config.example.yaml tracked as a template instead.
+conf/app_config.yaml

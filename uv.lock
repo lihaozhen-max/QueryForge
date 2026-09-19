@@ -2841,8 +2841,9 @@ wheels = [
 [[package]]
 name = "zhangguiwenshu"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "asyncmy" },
     { name = "cryptography" },
     { name = "elasticsearch", extra = ["async"] },
@@ -2861,6 +2862,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = "==3.14.3" },
     { name = "asyncmy", specifier = "==0.2.11" },
     { name = "cryptography", specifier = "==46.0.4" },
     { name = "elasticsearch", extras = ["async"], specifier = ">=8,<9" },
