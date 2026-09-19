@@ -17,13 +17,19 @@
 
 | 文件 | 作用 | 依赖 |
 | --- | --- | --- |
-| `gen_eval_set.py` | 生成评测集（模板抽样） | **仅标准库** |
+| `gen_eval_set.py` | 生成评测集（模板抽样，**直接给标准 SQL**） | **仅标准库** |
 | `validate_sql.py` | 校验标准 SQL 是否真能执行 | **仅标准库 + sqlite3** |
-| `data/test.jsonl` | 评测集（每行一条样本） | 产物 |
-| `data/test_stats.md` | 分层统计，可直接放进交付文档 | 产物 |
+| `make_corpus.py` | 生成训练用问题语料（**只给问题**） | **仅标准库** |
+| `make_negatives.py` | 由标准 SQL 机械反向生成澄清/拒答样本 | **仅标准库** |
+| `build_train_set.py` | 跑现有流水线采集 SQL 标准答案 + 执行校验 | 复用项目已有依赖 |
+| `data/README.md` | 数据流水线总览、执行顺序与已知限制 | — |
+| `data/test.jsonl` | 评测集（115 条，**冻结，不参与训练**） | 产物 |
+| `data/test_stats.md` | 评测集分层统计，可直接放进交付文档 | 产物 |
+| `data/corpus.txt` | 训练问题语料（1035 条） | 产物 |
+| `data/negatives.jsonl` | 澄清 + 拒答负样本 | 产物 |
 
-两个脚本**都只用 Python 标准库**，因此当前项目 `.venv` 不需要新增任何依赖，
-用系统 Python 3.14 或 `.venv` 的 Python 3.13 都能直接跑。
+以上脚本**都只用 Python 标准库**（`build_train_set.py` 额外复用项目已有的 SQLAlchemy / langgraph 等），
+因此当前项目 `.venv` 不需要新增任何依赖，`pyproject.toml` 无需改动。
 
 ---
 
@@ -144,12 +150,54 @@ python finetune/validate_sql.py
 
 ---
 
-## 五、下一步
+## 五、训练数据采集（P2）
 
-已完成的只有 P0（评测集）。后续见 `微调规划.md` 第七节路线图：
+`build_train_set.py` 复用**现有 LangGraph 流水线**产出 SQL 标准答案，不修改任何节点逻辑：
 
+- 用 `stream_mode="values"` 从图**外部**订阅累计状态，取终态里的
+  `table_infos` / `metric_infos` / `date_info` / `db_info` / `sql`；
+  （不能用 `updates`：`execute_sql` 只往 `stream_writer` 写结果，不写 state。）
+- 标准 SQL 必须同时通过 `validate_sql()`（`EXPLAIN`）与 `execute_sql()`，任一失败即丢弃；
+- 每采一条就落盘，中断后 `--resume` 续跑；
+- system 提示词**直接从 `prompt/generate_sql.prompt` 抽取**角色与任务要求段，
+  保证训练期与推理期的系统约束完全一致（线上改 prompt 不会造成分布漂移）。
+
+### 负样本怎么来
+
+流水线**产不出澄清样本**（它没有澄清能力），而项目没有人工标注。
+`make_negatives.py` 用**机械反向变换**解决：标准 SQL 必然含时间条件、分组维度、聚合口径，
+逐一摘掉即得"信息不全、应当反问"的样本。该变换**可逆且按构造正确**，无需人工判断。
+
+> ⚠️ 反向变换必须用**自然口语模板 + 填入业务实体**，不能靠正则删词 ——
+> 否则会产出"月的总体情况是多少"这种不合语法、也不像真人提问的句子。
+
+### 执行
+
+```bash
+python finetune/make_corpus.py                    # ① 语料 1035 条
+python finetune/build_train_set.py --limit 50     # ② 冒烟（需四个服务已启动）
+python finetune/build_train_set.py --resume       # ③ 正式采集，可断点续跑
+python finetune/make_negatives.py                 # ④ 负样本
+```
+
+详细的数据流向与已知限制见 `data/README.md`。
+
+### 未验证的部分
+
+`build_train_set.py` 的**跑图与数据库路径未在本机执行验证** ——
+需要 MySQL / Qdrant / ES / Embedding 四个服务同时运行，本机未启动。
+已验证的是：模块导入、提示词构造（`build_system_prompt` / `build_human_prompt` 输出正确），
+以及 `gen_eval_set.py` / `validate_sql.py` / `make_corpus.py` / `make_negatives.py` 的完整产出。
+
+---
+
+## 六、下一步
+
+进度见 `微调规划.md` 第七节路线图：
+
+- ~~**P0** 评测集~~ ✅ 已完成（115 条，93 条标准 SQL 全部可执行）
+- ~~**P2** 采集脚本~~ ✅ 已完成（脚本就绪，待服务启动后实跑）
 - **P1** 跑现状基线，填对比矩阵第一行
-- **P2** 写采集脚本，用现有 LangGraph 流水线产出 1000 条训练数据（复用 `compiled_graph`，不新增依赖）
 - **P3–P4** 租卡、冒烟、QLoRA 训练
 - **P5** 连真实 MySQL 跑执行准确率（EX）评测
 - **P6** 替换 `generate_sql` + 在 `graph.py` 新增澄清分支
