@@ -99,6 +99,12 @@ START → extract_keywords ─┼─→ recall_metric ─┼─→ merge_retriev
 │   ├── app_config.example.yaml    # 配置模板，照此复制出 app_config.yaml
 │   └── meta_config.yaml           # 数仓表/字段/指标的语义定义（构建知识库的输入）
 ├── prompt/                        # 8 个提示词文件，与代码解耦
+├── finetune/                      # 模型微调（规划 + 可运行脚本，见 finetune/IMPLEMENTATION.md）
+│   ├── 微调规划.md                # 微调总体方案：目标拆解、基座选型、训练与评测、路线图
+│   ├── IMPLEMENTATION.md          # 实施说明：脚本用法与设计理由
+│   ├── gen_eval_set.py            # 评测集生成器（模板抽样，仅标准库）
+│   ├── validate_sql.py            # 标准 SQL 执行校验（SQLite 影子库，仅标准库）
+│   └── data/                      # 生成的评测集与统计
 └── app/
     ├── agent/                     # LangGraph 编排层
     │   ├── graph.py               # 建图：节点注册、边、条件边
@@ -191,7 +197,31 @@ curl -N -X POST http://localhost:8000/api/query \
 
 ---
 
-## 六、学习与复习材料
+## 六、模型微调
+
+针对作业「3.2 问数项目模型微调」的六项能力要求（字段映射、字段值标准化、指标口径、意图澄清、多表关联、SQL 安全与方言），本项目配套了完整的微调方案与可运行脚本。
+
+| 文档 / 脚本 | 说明 |
+| --- | --- |
+| `finetune/微调规划.md` | 目标拆解、数据方案、基座选型与费用核算、LLaMA-Factory 训练配置、三层评测、路线图与风险 |
+| `finetune/IMPLEMENTATION.md` | 脚本用法与设计理由 |
+| `finetune/gen_eval_set.py` | 评测集生成器：模板抽样 × 真实 schema，输出可校验的评测样本 |
+| `finetune/validate_sql.py` | 用 `dw.sql` 建 SQLite 影子库，逐条执行校验标准 SQL |
+
+两个脚本**只用 Python 标准库**，无需新增依赖，直接运行：
+
+```bash
+python finetune/gen_eval_set.py     # 生成评测集到 finetune/data/
+python finetune/validate_sql.py     # 校验标准 SQL 是否真能执行
+```
+
+> **为什么评测集是程序化生成的**：本项目没有人工标注。若让大模型凭空编标准 SQL，
+> 编出来的答案未必能执行、能执行也未必口径正确，等于用幻觉当标准答案。
+> 因此改为「模板抽样 + 真实数仓取值 + 数据库硬校验」，答案均可执行验证。
+
+---
+
+## 七、学习与复习材料
 
 - `测试题/测试题.md` —— 33 道测试题详解，每题按「一句话结论 → 详细展开 → 项目落地（文件:行号）」组织；
 - `测试题/测试题2.md` —— 纯净题目版，可自测；
@@ -199,8 +229,9 @@ curl -N -X POST http://localhost:8000/api/query \
 
 ---
 
-## 七、说明
+## 八、说明
 
 - `conf/app_config.yaml` 含数据库口令与 API Key，**已在 `.gitignore` 中忽略**，不会进入版本库；请从 `conf/app_config.example.yaml` 复制生成。
 - `conf/meta_config.yaml` 只包含数仓表/字段/指标的语义描述，**不含任何凭据**，且是构建知识库的必要输入，因此正常纳入版本管理。
 - 仓库中的代码部分带有教学性质的 `if __name__ == '__main__'` 自测块与 `app/api/test/` 示例模块，用于演示 FastAPI、SQLAlchemy、Qdrant、ES 等组件的独立用法，不影响主流程。
+- `finetune/` 下的微调脚本仅依赖 Python 标准库，**未向本项目引入 torch / transformers / peft 等训练依赖**（训练依赖只装在租卡机器）。
