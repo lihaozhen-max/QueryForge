@@ -19,6 +19,8 @@
 | --- | --- | --- |
 | `gen_eval_set.py` | 生成评测集（模板抽样，**直接给标准 SQL**） | **仅标准库** |
 | `validate_sql.py` | 校验标准 SQL 是否真能执行 | **仅标准库 + sqlite3** |
+| `shadow_db.py` | 共享工具：由 `dw.sql` 建 SQLite 影子数仓、结果集等价比较 | **仅标准库** |
+| `eval_ex.py` | 评测器：三层指标（可执行率 / 执行准确率 EX / 澄清拒答准确率） | 标准库；`--db mysql` 时用项目已有依赖 |
 | `make_corpus.py` | 生成训练用问题语料（**只给问题**） | **仅标准库** |
 | `make_negatives.py` | 由标准 SQL 机械反向生成澄清/拒答样本 | **仅标准库** |
 | `build_train_set.py` | 跑现有流水线采集 SQL 标准答案 + 执行校验 | 复用项目已有依赖 |
@@ -28,7 +30,8 @@
 | `data/corpus.txt` | 训练问题语料（1035 条） | 产物 |
 | `data/negatives.jsonl` | 澄清 + 拒答负样本 | 产物 |
 
-以上脚本**都只用 Python 标准库**（`build_train_set.py` 额外复用项目已有的 SQLAlchemy / langgraph 等），
+以上脚本**都只用 Python 标准库**（`build_train_set.py` 与 `eval_ex.py --db mysql`
+额外复用项目已有的 SQLAlchemy / langgraph 等），
 因此当前项目 `.venv` 不需要新增任何依赖，`pyproject.toml` 无需改动。
 
 ---
@@ -191,13 +194,83 @@ python finetune/make_negatives.py                 # ④ 负样本
 
 ---
 
-## 六、下一步
+## 六、评测器（P1 / P5）
+
+`eval_ex.py` 实现规划文档「三层指标」的全部计算：
+
+| 层级 | 指标 | 计算方式 |
+| --- | --- | --- |
+| L1 | 可执行率 | 预测 SQL 能执行成功的比例 |
+| L2 | 执行准确率 EX | 预测 SQL 结果集与标准 SQL **等价**的比例 |
+| L3 | 澄清/拒答准确率 | 该反问时反问、该拒答时拒答的比例 |
+
+**为什么用「结果集等价」而不是「SQL 文本比对」**：同一业务问题有多条等价 SQL
+（JOIN 顺序、别名、WHERE 位置不同），文本比对会把正确答案判错。
+执行结果集比对（EX）是 Text2SQL 领域标准做法，也更贴合"问数"的真实目标 ——
+用户要的是数据，不是某种特定写法。
+
+### 两种数据库后端
+
+| 后端 | 用途 | 说明 |
+| --- | --- | --- |
+| `--db sqlite` | 离线影子库 | 零依赖、随时可跑，用于**验证评测逻辑**与快速冒烟 |
+| `--db mysql` | **真实 MySQL** | **正式基线/对比数据的来源**，MySQL 方言在 SQLite 上覆盖不到 |
+
+### 用法
+
+```bash
+# ① 自检：用标准答案当预测，三层指标应全为 100%（验证评测逻辑本身）
+python finetune/eval_ex.py --db sqlite --pred-from-ref
+
+# ② 评测真实模型输出（正式数据，需 MySQL 已启动）
+python finetune/eval_ex.py --db mysql \
+    --predictions preds/qwen3_8b_lora.jsonl \
+    --name "微调后 Qwen3-8B LoRA" \
+    --details-out preds/qwen3_8b_lora.details.jsonl
+```
+
+预测文件格式（每行一条），`type` 可省略：
+
+```json
+{"id": "multi_table_join_9e7a6902", "type": "SQL",     "content": "SELECT ..."}
+{"id": "clarify_xxx",               "type": "CLARIFY", "content": "这个问题还缺少..."}
+```
+
+> 类型判定**以内容为准**，声明字段只作兜底 —— 模型自称 `type=SQL` 但实际吐出一段
+> 说明文字是常见失败模式，信任声明字段会把它误判成"SQL 执行失败"，掩盖真实问题。
+
+### 已验证：评测器不是橡皮图章
+
+评测器的价值在于**能扣分**。已用负面测试验证它能正确识别 5 类失败：
+
+| 失败模式 | 预期判定 | 实测 |
+| --- | --- | --- |
+| 该给 SQL 却反问 | `WRONG_TYPE` | ✅ |
+| SQL 语法错 | `EXEC_FAIL` | ✅ |
+| SQL 能跑但结果不对 | `EX_MISMATCH` | ✅ |
+| 该澄清却硬编 SQL | `BEHAVE_FAIL` | ✅ |
+| 危险请求不拒绝、反而给 SQL | `BEHAVE_FAIL` | ✅ |
+
+（负面测试脚本为一次性验证工具，未入库。）
+
+### 自检过程中发现并修正的问题
+
+1. **评测集标注自相矛盾**：4 条危险请求被标成 `expected_type="SQL"` 但 `reference_sql=None`，
+   导致评测把"正确拒答"判为失败。自检报出 93/97 而非 97/97，据此定位并修正了
+   `gen_eval_set.py` 的标注逻辑（类型由"是否给出标准 SQL"决定），并新增 `refuse` 字段
+   区分"应拒答"与"应澄清"。
+2. **分类逻辑过信声明字段**：改为以内容为准（见上）。
+
+---
+
+## 七、下一步
 
 进度见 `微调规划.md` 第七节路线图：
 
 - ~~**P0** 评测集~~ ✅ 已完成（115 条，93 条标准 SQL 全部可执行）
 - ~~**P2** 采集脚本~~ ✅ 已完成（脚本就绪，待服务启动后实跑）
-- **P1** 跑现状基线，填对比矩阵第一行
+- ~~**P1** 评测器~~ ✅ 已完成（三层指标，自检 100%，负面测试可正确扣分）
+- **P1'** 跑现状基线，填对比矩阵第一行（需先启动 MySQL）
 - **P3–P4** 租卡、冒烟、QLoRA 训练
 - **P5** 连真实 MySQL 跑执行准确率（EX）评测
 - **P6** 替换 `generate_sql` + 在 `graph.py` 新增澄清分支

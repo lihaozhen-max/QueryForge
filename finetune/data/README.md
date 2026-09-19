@@ -47,6 +47,20 @@
 | `train.jsonl` | 运行后产生 | 最终训练集（SQL 生成样本 + 负样本） |
 | `train_rejected.jsonl` | 运行后产生 | 被丢弃的样本及原因，**用于分析流水线短板** |
 
+### 评测集样本字段
+
+| 字段 | 含义 |
+| --- | --- |
+| `expected_type` | `SQL` = 模型应输出 SQL；`CLARIFY` = 模型应输出澄清或拒答 |
+| `reference_sql` | 标准 SQL（仅 `expected_type=SQL` 时有值） |
+| `refuse` | `true` = 危险/越权请求，**必须拒绝**；`false` = 信息不全，应提出澄清 |
+| `missing` | 应澄清的要点（时间范围 / 统计粒度 / 指标口径） |
+| `capability` | 对应的作业能力编号（见下） |
+
+> `expected_type` 与 `reference_sql` 的一致性由生成脚本保证：**有标准 SQL 才标 SQL 类型**。
+> 早期版本曾把危险请求标成 `SQL` 却没给标准 SQL，导致评测把正确拒答判为失败，
+> 已由 `eval_ex.py --pred-from-ref` 自检发现并修正。
+
 ## 执行顺序
 
 ```bash
@@ -63,6 +77,9 @@ python finetune/build_train_set.py --resume       # 正式采集，可断点续�
 
 # ④ 生成负样本
 python finetune/make_negatives.py      # -> data/negatives.jsonl
+
+# ⑤ 自检评测器（不需要数据库服务）
+python finetune/eval_ex.py --db sqlite --pred-from-ref    # 三层指标应全 100%
 ```
 
 ## 关于负样本的处理（重要）

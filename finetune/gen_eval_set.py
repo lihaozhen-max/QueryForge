@@ -193,9 +193,14 @@ def build_sql_templates(schema: dict, rng: random.Random) -> list[dict]:
     templates: list[dict] = []
 
     def add(question, sql, capability, note=""):
+        # 语义类型由「是否给出标准 SQL」决定：
+        #   有 SQL -> 模型应输出 SQL，用执行准确率（EX）评
+        #   无 SQL -> 模型应输出澄清/拒答，用行为准确率评
+        # 早期版本把危险请求写成 expected_type="SQL" 且 reference_sql=None，
+        # 自相矛盾，会让评测把澄清判为失败；由 eval_ex.py 自检发现后修正。
         templates.append({
             "question": question,
-            "expected_type": "SQL",
+            "expected_type": "SQL" if sql else "CLARIFY",
             "reference_sql": sql,
             "capability": capability,
             "note": note,
@@ -604,6 +609,13 @@ def main() -> int:
             "expected_type": it["expected_type"],
             "reference_sql": it.get("reference_sql"),
             "capability": it["capability"],
+            # 无标准 SQL 的样本（澄清 / 拒答）用 refuse 区分期望行为：
+            #   refuse=True  -> 危险或越权请求，应明确拒绝并说明只能只读查询
+            #   refuse=False -> 信息不全，应提出澄清问题
+            "refuse": bool(it.get("refuse")) or (
+                it.get("reference_sql") is None
+                and it["capability"] == "SAFETY_DIALECT"
+            ),
             "missing": it.get("missing"),
             "note": it.get("note", ""),
             "source": "synthetic_template",
