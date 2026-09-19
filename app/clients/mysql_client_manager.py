@@ -2,6 +2,7 @@ import asyncio
 from typing import Optional
 
 from sqlalchemy import text, Select
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.conf.app_config import DBConfig, app_config
@@ -14,8 +15,20 @@ class MysqlClientManager:
         self. client: Optional[AsyncEngine] = None
         self.session_factory:Optional[async_sessionmaker] = None
 
-    def _get_url(self):
-        return f"mysql+asyncmy://{self.config.user}:{self.config.password}@{self.config.host}/{self.config.database}?charset=utf8mb4"
+    def _get_url(self) -> URL:
+        # 注意：原实现用手拼字符串且漏掉了 port，导致配置里的端口不生效、
+        # 永远按驱动默认的 3306 连接（本机 3306 被其它 MySQL 占用时会误连并报鉴权失败）。
+        # 这里改用 URL.create 显式带上端口，并由它负责用户名/密码的转义
+        # （密码含 . @ : 等字符时手拼会出错）。
+        return URL.create(
+            drivername="mysql+asyncmy",
+            username=self.config.user,
+            password=self.config.password,
+            host=self.config.host,
+            port=self.config.port,
+            database=self.config.database,
+            query={"charset": "utf8mb4"},
+        )
 
     def init_client(self):
         self.client = create_async_engine(
