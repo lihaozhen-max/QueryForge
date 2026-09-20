@@ -52,8 +52,8 @@ load_best_model_at_end: true
 metric_for_best_model: eval_loss
 
 ### ---- 输出 ----
-output_dir: /root/autodl-tmp/output/qwen3-8b-lora-v2-ep1
-overwrite_output_dir: /root/autodl-tmp/output/qwen3-8b-lora-v2-ep1
+output_dir: /root/autodl-tmp/output/qwen3-8b-lora-v2-1ep-ep1
+overwrite_output_dir: /root/autodl-tmp/output/qwen3-8b-lora-v2-1ep-ep1
 report_to: none
 
 ### ==========================================================================

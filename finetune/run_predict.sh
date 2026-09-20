@@ -3,12 +3,14 @@
 # 掌柜问数 · 只跑预测（LoRA 版，不需要导出 16GB 合并模型）
 #
 # 用法（租卡机器，任意目录）：
-#     bash /root/autodl-tmp/run_predict.sh
+#     LORA_TAG=v2-1ep bash /root/autodl-tmp/run_predict.sh
+#     bash /root/autodl-tmp/run_predict.sh          # 默认 LORA_TAG=v2
 #
-# 环境变量（都可省略，用默认值）：
-#     LORA_TAG    LoRA 目录的后缀，默认 v2  → output/qwen3-8b-lora-${LORA_TAG}-ep1
-#     PRED_DIR    预测输出目录，默认 $BASE/preds_${LORA_TAG}
-#     例：LORA_TAG=v1 PRED_DIR=/root/autodl-tmp/preds bash run_predict.sh
+# 环境变量（都可省略）：
+#     LORA_TAG    LoRA 目录后缀 → output/qwen3-8b-lora-${LORA_TAG}-ep${N}
+#                 只训了 1 epoch 的话是 v2-1ep；跑了三组消融则是 v2
+#     EPOCHS      要预测哪几轮，默认 "1 2 3"（缺哪轮会自动跳过）
+#     PRED_DIR    输出目录，默认 $BASE/preds_${LORA_TAG}
 #
 # 前提：已经有基础模型与 LoRA 权重。本脚本**不做训练、不做导出**。
 #
@@ -18,6 +20,9 @@
 #
 # 幂等：已存在的预测文件会跳过。**换了新数据集重训后，请换一个空目录
 #       （或先删掉旧文件），否则会沿用上一轮的结果。**
+#
+# 输出文件命名固定为 base.jsonl / lora_ep{N}.jsonl（不带 tag），
+# 这样本机的 run_eval_all.ps1 不用改就能直接评。
 # ============================================================================
 set -u
 
@@ -55,7 +60,12 @@ for ep in $EPOCHS; do
     say "  [无] LoRA ep${ep}"
   fi
 done
-[ ${#AVAIL[@]} -gt 0 ] || die "没有任何 LoRA 权重，请先训练"
+if [ ${#AVAIL[@]} -eq 0 ]; then
+  say ""
+  say "  在 output/ 下没找到 qwen3-8b-lora-${LORA_TAG}-ep*，实际存在的是："
+  ls -d "$BASE"/output/qwen3-8b-lora-* 2>/dev/null | sed 's/^/    /' | tee -a "$LOG" || say "    （output 目录为空）"
+  die "没有任何 LoRA 权重。检查 LORA_TAG 是否与训练时一致"
+fi
 
 # ---- 原版模型 ----
 if [ -s "$PRED_DIR/base.jsonl" ]; then
