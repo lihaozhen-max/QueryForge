@@ -1,0 +1,37 @@
+# 统一换行符策略：仓库内一律使用 LF，检出时不自动转换。
+#
+# 为什么需要这个文件：
+#   Windows 上 core.autocrlf 常被设为 true，会把仓库里的 LF 在检出时换成 CRLF。
+#   对 .jsonl 这类数据文件来说这是**破坏性**的 —— JSON 字符串内部的换行也会被改写，
+#   严格解析器（pyarrow）会报 "Missing a closing quotation mark in string"。
+#   （详见 finetune/微调流程详解.md 第 8 章「坑 11」）
+#
+# 规则说明：
+#   * 文本文件一律以 LF 入库，禁止 git 自动转换
+#   * .jsonl / .json 数据文件标记为 binary，git 绝不碰它们的字节
+#   * .ps1 需要 UTF-8 BOM（Windows PowerShell 5.1 按 ANSI 解码中文会乱码），
+#     所以标记为 binary，避免 git 重写内容时把 BOM 弄丢
+
+* text=auto eol=lf
+
+*.jsonl  binary
+*.json   -text
+*.pptx   binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+
+*.ps1    binary
+*.bat    binary
+
+*.sh     text eol=lf
+*.py     text eol=lf
+*.md     text eol=lf
+*.yaml   text eol=lf
+*.yml    text eol=lf
+*.toml   text eol=lf
+*.sql    text eol=lf
+Dockerfile text eol=lf

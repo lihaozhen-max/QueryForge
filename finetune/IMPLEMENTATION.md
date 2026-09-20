@@ -224,9 +224,12 @@ python finetune/eval_ex.py --db sqlite --pred-from-ref
 
 # ② 评测真实模型输出（正式数据，需 MySQL 已启动）
 python finetune/eval_ex.py --db mysql \
-    --predictions preds/qwen3_8b_lora.jsonl \
-    --name "微调后 Qwen3-8B LoRA" \
-    --details-out preds/qwen3_8b_lora.details.jsonl
+    --predictions finetune/data/preds/lora_ep1.jsonl \
+    --name "B1 - Qwen3-8B LoRA 1 epoch" \
+    --details-out finetune/data/preds/lora_ep1.details.jsonl
+
+# ③ 一条命令跑完全部对照并打印汇总（Windows PowerShell）
+& .\finetune\run_eval_all.ps1
 ```
 
 预测文件格式（每行一条），`type` 可省略：
@@ -260,6 +263,14 @@ python finetune/eval_ex.py --db mysql \
    `gen_eval_set.py` 的标注逻辑（类型由"是否给出标准 SQL"决定），并新增 `refuse` 字段
    区分"应拒答"与"应澄清"。
 2. **分类逻辑过信声明字段**：改为以内容为准（见上）。
+3. **L3 打分的关键词表过窄**（2026-09-20 修正，只影响 L3）：
+   初版 `_REFUSE_MARKERS` 只有"无法执行 / 只能生成只读 / 抱歉"等少数写法，
+   把**语义完全正确但措辞不同**的拒绝判成失败 —— 例如原版模型回答
+   "生成的 SQL 只能用于查询，**不能涉及数据写入、更新、删除**等操作"，一个词都没命中。
+   已扩充等价说法（"只能生成查询"/"不能涉及写入"/"无法提供帮助"/"敏感信息" 等），
+   并新增 `_contains_sql_block()` **伪拒绝检测**：嘴上拒绝、正文却贴出 SQL 代码块的仍判失败
+   （实测该检测抓到了 1 条"拒答 + 附带 `DELETE FROM fact_order;`"的样本）。
+   修正后基线 L3 由 59.1% 升到 **77.3%**，全部对照统一重算；**L1/L2 与该词表无关，数字未变**。
 
 ---
 

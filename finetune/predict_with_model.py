@@ -5,8 +5,13 @@
 
 用途
 ----
-对「原版 Qwen3-8B」与「微调后的合并模型」各跑一次，产出两份预测文件，
+对「原版 Qwen3-8B」与「微调后的 LoRA 适配层」各跑一次，产出多份预测文件，
 下载回本机后用 eval_ex.py 算 EX，填充对比矩阵。
+
+**不需要合并模型**：用 `--adapter` 指定 LoRA 目录，脚本会自己
+`PeftModel.from_pretrained(...) + merge_and_unload()`。
+早期版本要求先 export 出 16GB 合并模型，三组实验就是 48GB，
+本机（50GB 磁盘）会在导出时 `No space left on device`，所以已改成适配层直载。
 
 输入
 ----
@@ -39,11 +44,12 @@ eval_context.jsonl  由本机 dump_context.py 导出，含每题的 schema 上�
         --context /root/autodl-tmp/data/eval_context.jsonl \
         --out /root/autodl-tmp/preds/base.jsonl
 
-    # 微调后模型全量
+    # 微调后模型全量（--adapter 指向 LoRA 目录，无需先合并出 16GB 完整模型）
     python predict_with_model.py \
-        --model /root/autodl-tmp/output/qwen3-8b-merged \
+        --model /root/autodl-tmp/models/Qwen3-8B \
+        --adapter /root/autodl-tmp/output/qwen3-8b-lora-ep1 \
         --context /root/autodl-tmp/data/eval_context.jsonl \
-        --out /root/autodl-tmp/preds/lora.jsonl
+        --out /root/autodl-tmp/preds/lora_ep1.jsonl
 """
 
 from __future__ import annotations
@@ -115,7 +121,10 @@ def clean_output(text: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="用指定模型对评测集做预测")
-    ap.add_argument("--model", required=True, help="模型目录（原版或合并后的）")
+    ap.add_argument("--model", required=True, help="基础模型目录")
+    ap.add_argument("--adapter", default="",
+                    help="LoRA 适配器目录（可选）。给了就在基础模型上挂 LoRA，"
+                         "**不需要先导出 16GB 的合并模型**，省磁盘也省时间。")
     ap.add_argument("--context", required=True, help="eval_context.jsonl")
     ap.add_argument("--out", required=True, help="预测输出 jsonl")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（冒烟）")
@@ -158,6 +167,12 @@ def main() -> int:
     tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         args.model, torch_dtype=torch.bfloat16, device_map="cuda", trust_remote_code=True)
+    if args.adapter:
+        # 直接在基础模型上挂 LoRA，避免导出 16GB 合并模型（磁盘吃不消）
+        from peft import PeftModel
+        print(f"      挂载 LoRA 适配器：{args.adapter}")
+        model = PeftModel.from_pretrained(model, args.adapter)
+        model = model.merge_and_unload()   # 合并进权重，推理更快
     model.eval()
     print(f"      加载完成（{time.time()-t0:.0f}s），dtype={next(model.parameters()).dtype}")
     if torch.cuda.is_available():

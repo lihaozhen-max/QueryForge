@@ -27,5 +27,8 @@ conf/app_config.yaml
 # 本地启动脚本（内含 LLM_API_KEY 等凭据），绝不入库
 start.ps1
 start.sh
+# 评测脚本会注入本机数据库口令，同样不入库；
+# 模板见 finetune/run_eval_all.example.ps1，真实口令用环境变量传。
+finetune/run_eval_all.ps1
 .env
 .env.*
