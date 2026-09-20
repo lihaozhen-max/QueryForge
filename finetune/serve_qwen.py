@@ -64,6 +64,21 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+# ==========================================================================
+# 注意：fastapi 的导入**必须在模块顶层**，不能放进函数里。
+# --------------------------------------------------------------------------
+# 本文件顶部有 `from __future__ import annotations`，它把所有注解变成**字符串**，
+# fastapi 在运行时用 get_type_hints 去**模块全局命名空间**解析这些字符串。
+# 如果把 `from fastapi import Request` 写在 build_app() 内部，`Request` 只存在于
+# 函数局部，全局里找不到 —— fastapi 无法识别 `request: Request` 是请求对象，
+# 就退化成把它当成一个**必填的查询参数**，于是 POST 报 422：
+#     {"detail":[{"type":"missing","loc":["query","request"],"msg":"Field required"}]}
+# 这个坑很隐蔽：代码看着完全正常，报错却指向"缺一个叫 request 的查询参数"。
+# 之前踩过（2026-09-20），所以这里显式留在顶层。
+# ==========================================================================
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+
 
 # ==========================================================================
 # 输出清洗：把思维链剥掉，只留最终答案
@@ -105,10 +120,10 @@ class Engine:
         self.lock = threading.Lock()
 
         t0 = time.time()
-        print(f"[engine] 加载 tokenizer：{model_dir}")
+        print(f"[engine] 加载 tokenizer：{model_dir}", flush=True)
         self.tok = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
 
-        print(f"[engine] 加载模型（{dtype}）……")
+        print(f"[engine] 加载模型（{dtype}）……", flush=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_dir,
             dtype=getattr(torch, dtype),
@@ -117,7 +132,7 @@ class Engine:
         )
         if adapter:
             from peft import PeftModel
-            print(f"[engine] 挂载 LoRA：{adapter}")
+            print(f"[engine] 挂载 LoRA：{adapter}", flush=True)
             self.model = PeftModel.from_pretrained(self.model, adapter)
             # 合并进权重，省一次每步的 LoRA 计算
             self.model = self.model.merge_and_unload()
@@ -166,6 +181,9 @@ class Engine:
         return content.strip(), n_prompt, n_out
 
 
+# 模块级状态。SERVED_NAME 在 main() 里按命令行设置，
+# 但 /v1/models 与响应体都要用它，所以必须是模块全局。
+SERVED_NAME = "qwen3-8b-lora"
 ENGINE: Engine | None = None
 
 
@@ -173,9 +191,6 @@ ENGINE: Engine | None = None
 # HTTP（FastAPI，项目本来就用它，零新增依赖）
 # ==========================================================================
 def build_app(default_max_tokens: int):
-    from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse, StreamingResponse
-
     app = FastAPI(title="Qwen3-8B LoRA (OpenAI compatible)", version="1.0")
 
     @app.get("/health")
@@ -277,9 +292,6 @@ def build_app(default_max_tokens: int):
     return app
 
 
-SERVED_NAME = "qwen3-8b-lora"
-
-
 def main() -> int:
     global ENGINE, SERVED_NAME
 
@@ -304,7 +316,7 @@ def main() -> int:
     ENGINE = Engine(args.model, args.adapter, args.thinking, args.max_len, args.dtype)
 
     import uvicorn
-    print(f"[http] 监听 http://{args.host}:{args.port}   model={SERVED_NAME}")
+    print(f"[http] 监听 http://{args.host}:{args.port}   model={SERVED_NAME}", flush=True)
     uvicorn.run(build_app(args.max_tokens), host=args.host, port=args.port, log_level="info")
     return 0
 
