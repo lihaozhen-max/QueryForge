@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 快速合成 generate_sql 训练数据（替代跑整条流水线采集）。
@@ -98,6 +98,58 @@ def build_system_prompt() -> str:
 # ==========================================================================
 # 从 meta / dw 库读出一次 schema，之后复用
 # ==========================================================================
+# JSON 列的读取陷阱（数据质量 bug，务必保留这个修复）
+# --------------------------------------------------------------------------
+# `column_info.examples` / `column_info.alias` / `metric_info.alias` /
+# `metric_info.relevant_columns` 在 MySQL 里是 **JSON 类型**。
+#
+#   * 走 ORM（merge_retrieved_info 的线上路径）：SQLAlchemy 会反序列化成 list ✅
+#   * 走裸 SQL（本脚本的 `text()` 查询）：asyncmy 把 JSON 列当字符串返回，
+#     形如 '["C001", "C002"]'
+#
+# 此时 `list(r.examples or [])` 不会得到列表，而是**把字符串按字符拆开**：
+#     ["C001"] -> ['[', '"', 'C', '0', '0', '1', '"', ']']
+#
+# 后果：train_synth.jsonl 里 4880 个字段的 examples/alias 全部是单字符垃圾，
+#       训练时模型看到的 schema 示例与推理时（干净）**分布不一致**；
+#       build_final_train_set 给负样本补 schema 时又把这些垃圾抄了进去。
+#       实测证据见 微调实验结果.md（第二轮的修复记录）。
+#
+# 因此：裸 SQL 读到的 JSON 列必须显式再 json.loads 一次。
+# ==========================================================================
+def _as_list(v) -> list:
+    """
+    把「JSON 列可能给到的各种形态」统一成 list。
+
+    * list / tuple      -> 原样返回
+    * JSON 字符串        -> json.loads
+    * None / 空           -> []
+    * 其它标量           -> [v]
+
+    关键：**字符串绝不能被直接 list() 或迭代**，否则会被按字符拆开。
+    """
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode("utf-8", "replace")
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return []
+        try:
+            parsed = json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            # 不是 JSON：退化成单元素列表，至少不丢信息
+            return [s]
+        if isinstance(parsed, (list, tuple)):
+            return list(parsed)
+        return [parsed]
+    return [v]
+
+
+# ==========================================================================
 async def load_schema(meta_session, dw_session) -> tuple[list[dict], list[dict], dict]:
     """返回 (table_infos, metric_infos, db_info)，结构与线上 merge_retrieved_info / add_extra_context 的产物一致"""
     # 表信息
@@ -118,9 +170,9 @@ async def load_schema(meta_session, dw_session) -> tuple[list[dict], list[dict],
             "name": r.name,
             "type": r.type,
             "role": r.role,
-            "examples": list(r.examples or [])[:10],
+            "examples": _as_list(r.examples)[:10],
             "description": r.description,
-            "alias": list(r.alias or []),
+            "alias": _as_list(r.alias),
         })
 
     # 指标信息
@@ -130,8 +182,8 @@ async def load_schema(meta_session, dw_session) -> tuple[list[dict], list[dict],
     metrics = [{
         "name": r.name,
         "description": r.description,
-        "relevant_columns": list(r.relevant_columns or []),
-        "alias": list(r.alias or []),
+        "relevant_columns": _as_list(r.relevant_columns),
+        "alias": _as_list(r.alias),
     } for r in rows]
 
     # 数据库版本/方言（与线上 add_extra_context 一致）

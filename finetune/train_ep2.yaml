@@ -2,7 +2,7 @@
 ###
 ### 用法（在租卡机器上）：
 ###   cd /root/autodl-tmp/LLaMA-Factory
-###   llamafactory-cli train /root/autodl-tmp/train_qwen3_8b_lora.yaml
+###   llamafactory-cli train /root/autodl-tmp/train_ep2.yaml
 ###
 ### 关键参数说明见文件末尾注释。
 
@@ -52,8 +52,8 @@ load_best_model_at_end: true
 metric_for_best_model: eval_loss
 
 ### ---- 输出 ----
-output_dir: /root/autodl-tmp/output/qwen3-8b-lora-ep2
-overwrite_output_dir: true
+output_dir: /root/autodl-tmp/output/qwen3-8b-lora-v2-ep2
+overwrite_output_dir: /root/autodl-tmp/output/qwen3-8b-lora-v2-ep2
 report_to: none
 
 ### ==========================================================================
@@ -65,7 +65,7 @@ report_to: none
 ### lora_target: all     对所有线性层加 LoRA，比只加 q_proj/v_proj 效果好。
 ### cutoff_len: 4096     训练样本的 human 段含完整 schema，比较长，不能设太小，
 ###                       否则 schema 会被截断，直接影响字段映射能力。
-### num_train_epochs: 3  656 条 × N epoch（等效 batch 16）。
+### num_train_epochs: 3  1591 条 × N epoch（等效 batch 16，约 100 步/epoch）。
 ###                       数据量不大，3 epoch 是常用起点；若 eval_loss 早早回升就减到 2。
 ### learning_rate: 1e-4  LoRA 常用区间 1e-4 ~ 2e-4。
 ### save_total_limit: 2  磁盘有限，只保留最近两个检查点。

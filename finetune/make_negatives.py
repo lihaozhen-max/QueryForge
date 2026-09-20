@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 由标准 SQL 机械反向生成「澄清类」与「拒答类」训练样本。
@@ -458,6 +458,16 @@ def main() -> int:
     parser.add_argument("--per-combo", type=int, default=18,
                         help="每种缺失组合最多合成多少条（0=不限）")
     parser.add_argument("--schema", type=Path, default=None)
+    # ---- 澄清样本来源开关 ----
+    # 第一轮实测发现：这里合成的澄清样本**几乎每条都带业务实体**
+    # （"三星最近如何？""耐克怎么样？"），模型因此学成"看到实体词就反问"，
+    # 遇到"客单价怎么样"这种无实体的裸指标问句就直接写 SQL。
+    # 现改用 synthesize_clarify_short.py 生成**无实体超短问句**作为澄清主力，
+    # 本脚本默认只出拒答样本；如需保留旧的模板/反向样本，显式打开下面的开关。
+    parser.add_argument("--keep-template-clarify", action="store_true",
+                        help="保留「模板直接合成」的澄清样本（默认关闭，已由短问句脚本取代）")
+    parser.add_argument("--keep-reverse-clarify", action="store_true",
+                        help="保留「反向变换」的澄清样本（默认关闭）")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
@@ -504,23 +514,35 @@ def main() -> int:
     schema = load_schema(schema_path)
 
     # ---- 澄清样本：两条来源合并 ----
-    # ① 模板直接合成：显式覆盖 7 种缺失组合，保证均衡（主力）
+    # ① 模板直接合成：显式覆盖 7 种缺失组合，保证均衡
     # ② 反向变换：从 SQL 反推，覆盖"时间+口径/粒度+口径"两类（补充）
-    clarify = synthesize_clarify(schema, rng, per_combo=args.per_combo)
-    seen_q: set[str] = {c["question"] for c in clarify}
-    n_tpl = len(clarify)
+    #
+    # ⚠️ 两者默认都关闭：它们生成的问句几乎都带业务实体，正是第二轮要修的病根。
+    #    澄清主力已换成 synthesize_clarify_short.py（无实体超短问句）。
+    #    需要对照实验时用 --keep-template-clarify / --keep-reverse-clarify 打开。
+    clarify: list[dict] = []
+    seen_q: set[str] = set()
+    n_tpl = 0
+    if args.keep_template_clarify:
+        clarify = synthesize_clarify(schema, rng, per_combo=args.per_combo)
+        seen_q = {c["question"] for c in clarify}
+        n_tpl = len(clarify)
 
-    rng.shuffle(sql_pool)
     n_rev = 0
-    for q, sql in sql_pool:
-        if len(clarify) >= args.max_clarify:
-            break
-        item = reverse_to_clarify(q, sql, rng)
-        if item and item["question"] not in seen_q:
-            seen_q.add(item["question"])
-            clarify.append(item)
-            n_rev += 1
-    print(f"[2/4] 澄清样本 {len(clarify)} 条（模板合成 {n_tpl} + 反向变换 {n_rev}）")
+    if args.keep_reverse_clarify:
+        rng.shuffle(sql_pool)
+        for q, sql in sql_pool:
+            if len(clarify) >= args.max_clarify:
+                break
+            item = reverse_to_clarify(q, sql, rng)
+            if item and item["question"] not in seen_q:
+                seen_q.add(item["question"])
+                clarify.append(item)
+                n_rev += 1
+    if clarify:
+        print(f"[2/4] 澄清样本 {len(clarify)} 条（模板合成 {n_tpl} + 反向变换 {n_rev}）")
+    else:
+        print("[2/4] 澄清样本 0 条（已交给 synthesize_clarify_short.py 生成，见其文件头说明）")
 
     # ---- 拒答样本 ----
     refusals = build_refusal_samples(schema, rng)
@@ -552,9 +574,12 @@ def main() -> int:
 
     print(f"[4/4] 已写出 {len(records)} 条 -> {args.out}")
     print(f"      澄清 {len(clarify)} 条 | 拒答 {len(refusals)} 条")
+    if not clarify:
+        print()
+        print("  注意：澄清样本为 0 —— 澄清主力已改为 synthesize_clarify_short.py")
+        print("        （无实体超短问句，解决'只认实体词才反问'的病根）。")
     print()
-    print("  说明：澄清样本由标准 SQL 机械摘除时间/维度/口径反向生成，")
-    print("       变换按构造即可保证答案正确，无需人工标注。")
+    print("  说明：拒答样本由危险请求模板生成，答案按构造即正确，无需人工标注。")
     return 0
 
 

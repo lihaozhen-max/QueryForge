@@ -1,14 +1,25 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 合并三路数据源，生成最终训练集（LLaMA-Factory sharegpt 格式）。
 
 数据源
 ------
-1. train_synth.jsonl   394 条  问数 → SQL（合成，已过 EXPLAIN + 执行校验）
-2. correct_sql.jsonl   541 条  (错误SQL + 真实报错) → 修正 SQL
-3. negatives.jsonl      33 条  澄清 / 拒答
-   train.jsonl          43 条  早期流水线采集（可选，格式同 1）
+1. train_synth.jsonl   问数 → SQL（合成，已过 EXPLAIN + 执行校验）
+2. correct_sql.jsonl   (错误SQL + 真实报错) → 修正 SQL
+3. negatives.jsonl     澄清 / 拒答
+   train.jsonl          早期流水线采集（可选，格式同 1）
+4. **clarify_short.jsonl  澄清/拒答专项样本（第二轮新增）**
+
+**为什么需要第 4 路数据源（第二轮的核心改动）**
+    第一轮实测：澄清准确率 72.2% → 55.6%，失败题型全部是"无业务实体的超短问句"
+    （"客单价怎么样""销售额是多少""利润率是多少"）。
+    查数据发现，negatives.jsonl 里的澄清问句**几乎每条都带业务实体**
+    （"三星最近如何？""耐克怎么样？"，平均 9.9 字），
+    模型因此学成"**看到实体词就反问**"而不是"**信息不足就反问**"。
+    `synthesize_clarify_short.py` 专造无实体超短问句（平均 5.6 字、95% 无实体、
+    显式覆盖 14 种缺失组合），本脚本把它作为**澄清样本的主力来源**。
+    negatives.jsonl 里的旧模板问句默认不再参与（见 make_negatives.py 的开关）。
 
 本脚本要修的两个关键问题
 ------------------------
@@ -229,7 +240,13 @@ def build_human(question: str, table_tpl: dict, metrics: list) -> str:
         tables = FALLBACK_TABLES
 
     def dump(o) -> str:
-        return yaml.dump(o, allow_unicode=True, sort_keys=False).strip() if o else "（无）"
+        if not o:
+            return "（无）"
+        # ⚠️ width 必须给大值：yaml.dump 默认按 80 列折行，会把长字符串从中间断开，
+        #    把 examples 里的 ['C001'] 拆成 "['['"、'"'、"C" 这种垃圾行。
+        #    正确做法是让它永远不折行，保持与线上 schema 一致的形态。
+        return yaml.dump(o, allow_unicode=True, sort_keys=False,
+                         default_flow_style=False, width=10 ** 6).strip()
 
     date_info = {"date": "2026-09-19", "weekday": "Saturday", "quarter": "Q3"}
     db_info = {"version": "8.0.46", "dialect": "mysql"}
@@ -247,21 +264,35 @@ def main() -> int:
     ap.add_argument("--val-ratio", type=float, default=0.08, help="验证集比例")
     ap.add_argument("--correct-ratio", type=float, default=0.5,
                     help="correct_sql 相对 generate_sql 的目标比例（0=不降采样）")
-    ap.add_argument("--clarify-ratio", type=float, default=0.18,
-                    help="clarify 相对 generate_sql 的目标比例（0=不降采样）")
+    ap.add_argument("--clarify-ratio", type=float, default=0.40,
+                    help="clarify 相对 generate_sql 的目标比例（0=不降采样）。"
+                         "第二轮由 0.18 提到 0.40：澄清是第一轮最大短板，需要更多样本；"
+                         "0.40 × 368 ≈ 147 条澄清，约占训练集 18%")
+    ap.add_argument("--max-refuse", type=int, default=0,
+                    help="拒答样本上限（0=不限）。拒答太少训久了会被 SQL 能力淹没")
+    ap.add_argument("--skip-negatives", action="store_true",
+                    help="忽略 negatives.jsonl。当 clarify_short.jsonl 已自带拒答样本时"
+                         "用它避免拒答重复（两边的拒答意见高度重叠）")
+    ap.add_argument("--synth-file", default="train_synth.jsonl",
+                    help="问数→SQL 合成数据源文件名。默认用第一轮的 train_synth.jsonl；"
+                         "修掉 JSON 列读取 bug 后重新生成的版本是 train_synth_v2.jsonl"
+                         "（948 条，schema examples 干净）")
     ap.add_argument("--seed", type=int, default=20250924)
     ap.add_argument("--out-dir", type=Path, default=DATA)
     args = ap.parse_args()
 
-    src_sql = load_jsonl(DATA / "train_synth.jsonl")
+    src_sql = load_jsonl(DATA / args.synth_file)
     src_pipe = load_jsonl(DATA / "train.jsonl")
     src_correct = load_jsonl(DATA / "correct_sql.jsonl")
-    src_neg = load_jsonl(DATA / "negatives.jsonl")
+    src_neg = [] if args.skip_negatives else load_jsonl(DATA / "negatives.jsonl")
+    src_short = load_jsonl(DATA / "clarify_short.jsonl")
     print(f"[1/4] 载入数据源")
-    print(f"      train_synth   {len(src_sql):>4} 条（问数→SQL，合成）")
-    print(f"      train(流水线)  {len(src_pipe):>4} 条（问数→SQL）")
-    print(f"      correct_sql   {len(src_correct):>4} 条（纠错）")
-    print(f"      negatives     {len(src_neg):>4} 条（澄清/拒答）")
+    print(f"      {args.synth_file:<21} {len(src_sql):>4} 条（问数→SQL，合成）")
+    print(f"      train(流水线)          {len(src_pipe):>4} 条（问数→SQL）")
+    print(f"      correct_sql           {len(src_correct):>4} 条（纠错）")
+    print(f"      negatives             {len(src_neg):>4} 条（澄清/拒答）"
+          + ("  [已跳过 --skip-negatives]" if args.skip_negatives else ""))
+    print(f"      clarify_short         {len(src_short):>4} 条（无实体超短问句澄清/拒答，主力）")
 
     # ---- 抽取 schema 模板，用于给 negatives 补上下文 ----
     table_tpl, metrics_tpl = extract_templates([src_sql, src_pipe])
@@ -300,26 +331,37 @@ def main() -> int:
         })
 
     # ---- 3) 澄清/拒答：统一 system + **补齐缺失的 schema 上下文** ----
+    # 两路来源：
+    #   src_short = clarify_short.jsonl（第二轮主力，无实体超短问句）
+    #   src_neg   = negatives.jsonl（旧模板；make_negatives 默认只出拒答）
     fixed_neg = 0
-    for r in src_neg:
+    for r in src_short + src_neg:
         conv = r.get("conversations")
-        if not conv or len(conv) < 3:
-            continue
-        q = r.get("question") or ""
-        old_human = conv[1]["value"]
-        if "【可用数据表信息】" not in old_human:
+        if conv is None:
+            # clarify_short.jsonl 是扁平格式（question/answer），现场组装
+            q = r.get("question") or ""
+            ans = r.get("answer") or ""
             human = build_human(q, table_tpl, metrics_tpl)
             fixed_neg += 1
         else:
-            human = old_human
+            if len(conv) < 3:
+                continue
+            q = r.get("question") or ""
+            old_human = conv[1]["value"]
+            ans = conv[2]["value"]
+            if "【可用数据表信息】" not in old_human:
+                human = build_human(q, table_tpl, metrics_tpl)
+                fixed_neg += 1
+            else:
+                human = old_human
         records.append({
-            "task": "clarify" if not r.get("refuse") else "refuse",
+            "task": "refuse" if r.get("refuse") else "clarify",
             "question": q,
             "source": r.get("source"),
             "conversations": [
                 {"from": "system", "value": UNIFIED_SYSTEM},
                 {"from": "human", "value": human},
-                {"from": "gpt", "value": conv[2]["value"]},
+                {"from": "gpt", "value": ans},
             ],
         })
     print(f"[2/4] 合并 {len(records)} 条；其中为 {fixed_neg} 条负样本补齐了 schema 上下文")
@@ -357,6 +399,13 @@ def main() -> int:
     # 按缺失组合分层抽样，保证各组合都有覆盖。
     cl = [r for r in oth if r["task"] == "clarify"]
     rf = [r for r in oth if r["task"] != "clarify"]
+    if args.max_refuse > 0 and len(rf) > args.max_refuse:
+        # 拒答太多会挤占 SQL 能力；太少则训久了被淹没（第一轮 6 条 → 3 epoch 时退化）。
+        # 默认不限，留出调参空间。
+        rng_r = random.Random(args.seed)
+        rng_r.shuffle(rf)
+        print(f"      refuse 降采样：{len(rf)} -> {args.max_refuse} 条")
+        rf = rf[: args.max_refuse]
     if args.clarify_ratio > 0 and gen and cl:
         target_cl = int(len(gen) * args.clarify_ratio)
         if target_cl < len(cl):
@@ -462,7 +511,33 @@ def main() -> int:
         print(f"      {k:<14} {v:>4} 条  ({v/len(deduped)*100:.1f}%)")
     print()
     print(f"      合计 {len(deduped)} 条")
+
+    # ---- 与评测集的问句重合度（必须量化，不能假装没有）----
+    # 背景：评测集与训练语料同源（都由本项目 schema + 模板生成），
+    # 所以"问句撞车"是结构性存在的。它会**高估 L2**，而且不同版本之间
+    # 如果重合度差很多，L2 就不能直接横向比。这里显式打出来，便于判读。
+    import re as _re
+
+    def _norm(s: str) -> str:
+        return _re.sub(r"[\s，。、？！?！,.]", "", s or "")
+
+    test_path = DATA / "test.jsonl"
+    if test_path.exists():
+        test_q = {_norm(r.get("question", "")) for r in load_jsonl(test_path)}
+        hit = Counter(r["task"] for r in deduped if _norm(r.get("question") or "") in test_q)
+        n_hit = sum(hit.values())
+        print()
+        print(f"      与评测集问句重合：{n_hit} 条（{n_hit/len(deduped)*100:.1f}%）"
+              f"  {dict(hit)}")
+        print("      ⚠️ 同源语料导致的结构性重合，会高估 L2；跨版本比较时须看这一行是否接近。")
+        if hit.get("clarify", 0) or hit.get("refuse", 0):
+            print("      ❌ 澄清/拒答类出现重合 —— 这会直接污染 L3，必须处理！")
+
     print()
+    if task_counter.get("clarify", 0):
+        p = task_counter["clarify"] / len(deduped) * 100
+        print(f"      澄清占比 {p:.1f}%（第一轮 10.7%）。第一轮实测澄清是最大短板，")
+        print("      该占比不宜低于 12%；若明显偏低可调大 --clarify-ratio。")
     print("提醒：正确回答（SQL）类占绝大多数，澄清/拒答类是少数 —— 这个比例是合理的，")
     print("      但要确认模型没有因为样本少而忽略澄清行为（训练后看 L3 指标）。")
     return 0

@@ -32,3 +32,8 @@ start.sh
 finetune/run_eval_all.ps1
 .env
 .env.*
+
+# 一次性调试脚本（下划线开头），不入库
+_*.py
+_*.txt
+_*.jsonl
