@@ -73,6 +73,48 @@ def load_jsonl(p: Path) -> list[dict]:
     return out
 
 
+def resolve_data_paths(raw: list[str] | None) -> list[Path]:
+    """
+    把 --data 解析成真实存在的路径。
+
+    为什么需要这层：这个脚本会被从两个不同目录调用 ——
+      * 租卡机器：`cd /root/autodl-tmp && python check_token_len.py`
+        此时数据在同级的 `data/` 下，传进来的就是 `data/train_final.jsonl`
+      * 本机开发：`python finetune/check_token_len.py`
+        此时要跑到 `finetune/data/` 下才找得到
+
+    早期版本只认相对当前目录的路径，导致在父目录下跑会静默"跳过"所有文件、
+    打印"没有读到任何样本"—— 看起来像脚本坏了，其实是路径没对上。
+    现在按优先级依次尝试：原样 -> 脚本同级 -> 脚本同级的 data/ -> 当前目录的 data/。
+    """
+    if raw is None:
+        raw = ["train_final.jsonl", "val_final.jsonl"]
+    here = Path(__file__).resolve().parent
+    cands: list[Path] = []
+    for item in raw:
+        p = Path(item)
+        if p.is_absolute():
+            cands.append(p)
+            continue
+        for base in (Path.cwd(), here, here / "data", Path.cwd() / "data"):
+            q = base / p
+            if q.exists():
+                cands.append(q)
+                break
+        else:
+            # 都不存在时保留原始拼接，交给 load_jsonl 报"找不到"
+            cands.append(Path.cwd() / p)
+    # 去重但保持顺序
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for q in cands:
+        rq = q.resolve()
+        if rq not in seen:
+            seen.add(rq)
+            out.append(q)
+    return out
+
+
 class _Tok:
     """统一封装，只暴露"把字符串变成 token 数"这一件事。"""
 
@@ -116,8 +158,9 @@ def build_tokenizer(args) -> _Tok:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="量训练样本的 token 长度，检查是否会被截断")
-    ap.add_argument("--data", type=Path, nargs="+",
-                    default=[Path("data/train_final.jsonl"), Path("data/val_final.jsonl")])
+    ap.add_argument("--data", nargs="+", default=None,
+                    help="要检查的 jsonl（默认 train_final.jsonl + val_final.jsonl，"
+                         "自动在脚本同级与 data/ 下查找）")
     ap.add_argument("--tokenizer", default="/root/autodl-tmp/models/Qwen3-8B",
                     help="模型目录（里面有 tokenizer.json 时优先用它）")
     ap.add_argument("--tokenizer-json", type=Path, default=None,
@@ -125,6 +168,7 @@ def main() -> int:
     ap.add_argument("--cutoff", type=int, default=4096)
     ap.add_argument("--sample", type=int, default=5, help="打印几条最长的做拆解")
     args = ap.parse_args()
+    args.data = resolve_data_paths(args.data)
 
     tok = build_tokenizer(args)
     print(f"tokenizer : {tok.label}")
