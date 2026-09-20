@@ -37,3 +37,6 @@ finetune/run_eval_all.ps1
 _*.py
 _*.txt
 _*.jsonl
+
+# 测量 token 长度用的 Qwen tokenizer 缓存（从 ModelScope 下的，可随时重下）
+finetune/data/_qwen_tok/

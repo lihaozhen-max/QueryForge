@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-在租卡机器上量训练样本的真实 token 长度，确认 cutoff_len 不会截断掉答案。
+量训练样本的真实 token 长度，确认 cutoff_len 不会截断掉答案。
 
 为什么需要它
 ------------
@@ -12,11 +12,23 @@
 
 这类问题**不会报错**，只能靠量。所以每次改数据集/改 schema 长度后都要跑一遍。
 
-用法（租卡机器，在 /root/autodl-tmp 下）
----------------------------------------
+两种加载 tokenizer 的方式（自动选）
+----------------------------------
+1. **`tokenizers` 库直接读 `tokenizer.json`**（首选，不需要 transformers）
+   只要有一个 `tokenizer.json` 就能算，本地就能跑。
+2. `transformers.AutoTokenizer`（从模型目录加载）
+
+用法
+----
+    # 租卡机器：直接用基础模型目录里的 tokenizer
     python check_token_len.py
-    python check_token_len.py --cutoff 4096 --data data/train_final.jsonl data/val_final.jsonl
-    python check_token_len.py --sample 8      # 多打印几条最长的看长什么样
+
+    # 只给 tokenizer.json 也行
+    python check_token_len.py --tokenizer-json /path/to/tokenizer.json
+
+    # 本机（没装 transformers、没下模型）也能跑：
+    #   从 ModelScope 下载 tokenizer.json 后指过去
+    python finetune/check_token_len.py --tokenizer-json finetune/data/_qwen_tok/tokenizer.json
 
 输出
 ----
@@ -61,19 +73,61 @@ def load_jsonl(p: Path) -> list[dict]:
     return out
 
 
+class _Tok:
+    """统一封装，只暴露"把字符串变成 token 数"这一件事。"""
+
+    def __init__(self, fn, label: str):
+        self._fn = fn
+        self.label = label
+
+    def n(self, text: str) -> int:
+        return self._fn(text)
+
+
+def build_tokenizer(args) -> _Tok:
+    # ---- 方式 1：tokenizers 直接读 tokenizer.json ----
+    json_path = args.tokenizer_json
+    if json_path is None:
+        cand = Path(args.tokenizer) / "tokenizer.json"
+        if cand.exists():
+            json_path = cand
+
+    if json_path is not None and Path(json_path).exists():
+        try:
+            from tokenizers import Tokenizer
+            tk = Tokenizer.from_file(str(json_path))
+
+            def fn(text: str) -> int:
+                return len(tk.encode(text, add_special_tokens=False).ids)
+
+            return _Tok(fn, f"tokenizers（{json_path}，词表 {tk.get_vocab_size()}）")
+        except ImportError:
+            print("[提示] 没装 tokenizers，改用 transformers")
+
+    # ---- 方式 2：transformers ----
+    from transformers import AutoTokenizer
+    tk2 = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
+
+    def fn2(text: str) -> int:
+        return len(tk2.encode(text, add_special_tokens=False))
+
+    return _Tok(fn2, f"transformers（{args.tokenizer}）")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="量训练样本的 token 长度，检查是否会被截断")
     ap.add_argument("--data", type=Path, nargs="+",
                     default=[Path("data/train_final.jsonl"), Path("data/val_final.jsonl")])
     ap.add_argument("--tokenizer", default="/root/autodl-tmp/models/Qwen3-8B",
-                    help="tokenizer 路径（默认直接用基础模型目录）")
+                    help="模型目录（里面有 tokenizer.json 时优先用它）")
+    ap.add_argument("--tokenizer-json", type=Path, default=None,
+                    help="直接指定 tokenizer.json（本机没下模型时用）")
     ap.add_argument("--cutoff", type=int, default=4096)
     ap.add_argument("--sample", type=int, default=5, help="打印几条最长的做拆解")
     args = ap.parse_args()
 
-    from transformers import AutoTokenizer
-    tk = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
-    print(f"tokenizer: {args.tokenizer}")
+    tok = build_tokenizer(args)
+    print(f"tokenizer : {tok.label}")
     print(f"cutoff_len: {args.cutoff}")
     print()
 
@@ -89,23 +143,23 @@ def main() -> int:
 
         lens: list[int] = []
         parts: list[tuple[int, int, int]] = []
-        over: list[tuple[int, str, str]] = []
+        over: list[tuple[int, str, str, int]] = []
         by_task: dict[str, list[int]] = {}
 
         for r in recs:
             c = r.get("conversations") or []
             if len(c) < 3:
                 continue
-            ns = len(tk.encode(c[0]["value"], add_special_tokens=False))
-            nh = len(tk.encode(c[1]["value"], add_special_tokens=False))
-            ng = len(tk.encode(c[2]["value"], add_special_tokens=False))
+            ns = tok.n(c[0]["value"])
+            nh = tok.n(c[1]["value"])
+            ng = tok.n(c[2]["value"])
             n = ns + nh + ng
             lens.append(n)
             parts.append((ns, nh, ng))
             task = r.get("task", "?")
             by_task.setdefault(task, []).append(n)
             if n > args.cutoff:
-                over.append((n, task, r.get("question", "")[:40]))
+                over.append((n, task, r.get("question", "")[:40], len(lens) - 1))
 
         if not lens:
             continue
@@ -113,18 +167,16 @@ def main() -> int:
         s = sorted(lens)
         print(f"  token 长度：平均 {statistics.mean(lens):.0f} | 中位 {s[len(s)//2]} | "
               f"p90 {s[int(len(s)*0.90)]} | p99 {s[int(len(s)*0.99)]} | 最大 {max(s)}")
-        ns_avg = statistics.mean(p[0] for p in parts)
-        nh_avg = statistics.mean(p[1] for p in parts)
-        ng_avg = statistics.mean(p[2] for p in parts)
-        print(f"  构成占比：system {ns_avg:.0f} | human(schema+问题) {nh_avg:.0f} | gpt(答案) {ng_avg:.0f}")
+        print(f"  构成占比：system {statistics.mean(p[0] for p in parts):.0f} | "
+              f"human(schema+问题) {statistics.mean(p[1] for p in parts):.0f} | "
+              f"gpt(答案) {statistics.mean(p[2] for p in parts):.0f}")
         print()
         print(f"  >>> 超过 cutoff({args.cutoff}) 的样本：{len(over)} 条 "
               f"({len(over)/len(lens)*100:.2f}%)")
         if over:
             print("      ⚠️ 这些样本会被右侧截断，【用户查询】/答案可能整段丢失！")
-            print("      按任务类型：")
             cnt: dict[str, int] = {}
-            for _, t, _q in over:
+            for _, t, _q, _i in over:
                 cnt[t] = cnt.get(t, 0) + 1
             for t, v in sorted(cnt.items(), key=lambda kv: -kv[1]):
                 tot = len(by_task.get(t, []))
@@ -133,21 +185,19 @@ def main() -> int:
 
         print("  按任务类型：")
         for t, arr in sorted(by_task.items()):
-            a = sorted(arr)
-            print(f"    {t:<14} n={len(a):<5} 平均 {statistics.mean(a):>5.0f}  最大 {max(a):>5}")
+            print(f"    {t:<14} n={len(arr):<5} 平均 {statistics.mean(arr):>5.0f}  最大 {max(arr):>5}")
         print()
 
         if args.sample and over:
             print(f"  最长的 {args.sample} 条拆解：")
-            for n, t, q in sorted(over, reverse=True)[: args.sample]:
-                print(f"    {n:>5} tok  [{t}] {q}")
-                idx = lens.index(n)
+            for n, t, q, idx in sorted(over, reverse=True)[: args.sample]:
                 ns, nh, ng = parts[idx]
+                print(f"    {n:>5} tok  [{t}] {q}")
                 print(f"           system={ns}  human={nh}  gpt={ng}")
-                if ng > 200:
-                    print("           → gpt 段偏长，答案本身太长")
+                if ng > 300:
+                    print("           → gpt（答案）本身太长")
                 elif nh > args.cutoff * 0.8:
-                    print("           → human 段（schema）占绝大部分，该削 schema")
+                    print("           → human（schema）占绝大部分，该削 schema")
             print()
 
         grand_over += len(over)
@@ -159,9 +209,11 @@ def main() -> int:
               f"({grand_over/grand_total*100:.2f}%)")
         if grand_over == 0:
             print("✅ 无样本会被截断，可以开训。")
-        else:
-            print("❌ 存在被截断的样本，先处理再训（见文件头「结论怎么用」）。")
-    return 0
+            return 0
+        print("❌ 存在被截断的样本，先处理再训（见文件头「结论怎么用」）。")
+        return 1
+    print("没有读到任何样本。")
+    return 2
 
 
 if __name__ == "__main__":
