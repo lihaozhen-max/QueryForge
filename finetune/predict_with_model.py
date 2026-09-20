@@ -110,12 +110,38 @@ def build_human(rec: dict) -> str:
     )
 
 
-def clean_output(text: str) -> str:
-    """去掉思维链与 markdown 围栏，只留最终答案"""
-    t = text.strip()
-    # 去掉  thinking...<｜end▁of▁thinking｜>（Qwen3 混合推理模型可能输出）
-    t = re.sub(r"<think\b[^>]*>.*?<｜end▁of▁thinking｜>", "", t, flags=re.DOTALL | re.IGNORECASE)
-    t = re.sub(r"^```(?:sql)?\s*|\s*```$", "", t, flags=re.IGNORECASE).strip()
+def clean_output(text: str, thinking: bool = True) -> str:
+    """
+    去掉思维链与 markdown 围栏，只留最终答案。
+
+    思维链的分隔符有**两种**写法，必须都处理：
+
+    * 普通 ASCII：`<think> ... </think>`
+      —— chat_template 在 `enable_thinking=False` 时**预先塞进提示词**的
+         `<think>\\n\\n</think>\\n\\n` 用的就是这种。
+    * Qwen 专用 Unicode：`<think> ... <｜end▁of▁thinking｜>`
+      —— 模型自己**生成**思维链时用的（`｜` 是全角竖线、`▁` 是 U+2581）。
+
+    早期版本只匹配第二种，于是第一种一个字符都剥不掉；而那时恰好关着思维链，
+    模型就是"从空思维链块接着写"，剥不掉也没暴露问题。
+    改成两种都剥，并在剥完后兜底再查一次残留的结束标记。
+
+    `thinking=False` 时不做任何思维链剥离 —— 那种条件下提示词里已经带了空思维链块，
+    模型直接续写答案，文本里不会有思维链标记；此时任何剥离都是多余且可能误伤的。
+    """
+    t = (text or "").strip()
+    if thinking:
+        # 显式思维链（两种结束标记都覆盖）
+        t = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", t, flags=re.DOTALL | re.IGNORECASE)
+        t = re.sub(r"<think\b[^>]*>.*?<｜end▁of▁thinking｜>", "", t, flags=re.DOTALL | re.IGNORECASE)
+        # 兜底：不成对时，从开头到结束标记整段丢掉
+        if "<think" in t.lower():
+            t = re.sub(r"^.*?(?:</think\s*>|<｜end▁of▁thinking｜>)", "", t, flags=re.DOTALL | re.IGNORECASE)
+        # 残留的孤立标记
+        t = re.sub(r"</?think\b[^>]*>", "", t, flags=re.IGNORECASE)
+        t = t.replace("<｜end▁of▁thinking｜>", "")
+    # markdown 围栏
+    t = re.sub(r"^```(?:sql)?\s*|\s*```$", "", t, flags=re.IGNORECASE)
     return t.strip()
 
 
@@ -131,8 +157,25 @@ def main() -> int:
     ap.add_argument("--resume", action="store_true", help="跳过已预测的")
     ap.add_argument("--max-new-tokens", type=int, default=512)
     ap.add_argument("--batch-size", type=int, default=4)
-    ap.add_argument("--no-think", action="store_true", default=True,
-                    help="关闭思维链（默认开启，Qwen3 建议）")
+    # ---- 思维链开关 ----
+    # 这里原先写的是 `--no-think` + `action="store_true", default=True`，
+    # 那是个 **bug**：store_true 配 default=True 意味着 args.no_think 恒为 True，
+    # 于是 enable_thinking 恒为 False —— 这个开关**永远打不开思维链**。
+    #
+    # 为什么必须能打开：Qwen3 的 chat_template 里
+    #   enable_thinking=False → 渲染成 '<|im_start|>assistant\n<think>\n\n</think>\n\n'
+    #                            （预先塞一个**空**思维链块，等于命令模型"别想，直接答"）
+    #   enable_thinking=True  → 渲染成 '<|im_start|>assistant\n'（让模型自己决定要不要想）
+    # 二者是**不同的输入**，不是同一件事的开关。
+    # 实测：关掉思维链时模型会退化成硬编码日期（BETWEEN 20250201 AND 20250228），
+    #       开着时会走维表（IN (SELECT date_id FROM dim_date WHERE month = 2)）。
+    # 训练用的是 LLaMA-Factory 的 `qwen3` 模板，是否等价于 False 需以实际渲染为准，
+    # 因此默认值设为 True（让模型自己决定），并用 --no-think 才能关掉。
+    ap.add_argument("--think", dest="enable_thinking", action="store_true", default=True,
+                    help="开启思维链（默认）。与训练条件保持一致")
+    ap.add_argument("--no-think", dest="enable_thinking", action="store_false",
+                    help="关闭思维链。注意：这会让输入多一个空  thinking 块，"
+                         "实测 SQL 质量会下降，除非确认训练时也是这么喂的")
     args = ap.parse_args()
 
     import torch
@@ -189,7 +232,7 @@ def main() -> int:
             ]
             text = tok.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True,
-                enable_thinking=not args.no_think,
+                enable_thinking=args.enable_thinking,
             )
             inputs = tok(text, return_tensors="pt").to(model.device)
             with torch.no_grad():
@@ -201,7 +244,7 @@ def main() -> int:
                 )
             out_ids = gen[0][inputs["input_ids"].shape[1]:]
             raw = tok.decode(out_ids, skip_special_tokens=True)
-            content = clean_output(raw)
+            content = clean_output(raw, thinking=args.enable_thinking)
             ptype = "SQL" if _SELECT_RE.match(content) else "CLARIFY"
             if ptype == "SQL":
                 n_sql += 1

@@ -56,7 +56,21 @@ es:
   index_name: data_agent
 
 # llm的配置
-# 必填环境变量: LLM_API_KEY；模型名可用 LLM_MODEL_NAME 覆盖
+#
+# 两个用途：
+#   1) 本地跑**微调后的 Qwen3-8B**（推荐，本项目最终形态）：
+#        $env:LLM_PROVIDER   = 'openai_compatible'
+#        $env:LLM_BASE_URL   = 'http://127.0.0.1:8000/v1'   # 或隧道映射出来的地址
+#        $env:LLM_MODEL_NAME = 'qwen3-8b-lora'
+#        $env:LLM_API_KEY    = 'EMPTY'                       # 本地端点不校验 key
+#   2) 用 DeepSeek 云端做对照：
+#        $env:LLM_BASE_URL   = 'https://api.deepseek.com/v1'
+#        $env:LLM_MODEL_NAME = 'deepseek-flash'
+#        $env:LLM_API_KEY    = '<你的真实 key>'
+#
+# 四个环境变量都能覆盖；api_key 不写进文件，避免再次把密钥提交进仓库。
 llm:
+  provider: ${oc.env:LLM_PROVIDER,openai_compatible}
   model_name: ${oc.env:LLM_MODEL_NAME,deepseek-chat}
-  api_key: ${oc.env:LLM_API_KEY}
+  api_key: ${oc.env:LLM_API_KEY,''}
+  base_url: ${oc.env:LLM_BASE_URL,''}
