@@ -69,6 +69,7 @@ es:
 #        $env:LLM_API_KEY    = '<你的真实 key>'
 #
 # 四个环境变量都能覆盖；api_key 不写进文件，避免再次把密钥提交进仓库。
+# 空默认值要写成 ''，不能写成 ${oc.env:X,}（尾部逗号会触发 OmegaConf 警告）。
 llm:
   provider: ${oc.env:LLM_PROVIDER,openai_compatible}
   model_name: ${oc.env:LLM_MODEL_NAME,deepseek-chat}
