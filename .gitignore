@@ -40,3 +40,6 @@ _*.jsonl
 
 # 测量 token 长度用的 Qwen tokenizer 缓存（从 ModelScope 下的，可随时重下）
 finetune/data/_qwen_tok/
+
+# 租卡机器传回的预测压缩包：解压后 jsonl 已入库，包本身不必跟踪
+finetune/data/result_preds_*.tar.gz
